@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+option go_package = "./configservice";
+
+// Optimized for heavy traffic by using a unary batch RPC.
+service LanguageDetectorService {
+  // An RPC to send a batch of reports in a single message.
+  rpc ReportLanguageBatch(LanguageReportBatchRequest) returns (ReportResponse);
+}
+
+// Service for the Otel agents to report their health and status.
+// Optimized for heavy traffic by using a unary batch RPC.
+service AgentService {
+  // An RPC to send a batch of status updates in a single message.
+  rpc ReportAgentStatusBatch(AgentStatusBatchRequest) returns (ReportResponse);
+}
+
+// Service for the config updater itself, exposing administrative or real-time configuration APIs.
+service ConfigUpdaterService {
+  // Gets the current configuration.
+  rpc GetCurrentConfig(GetConfigRequest) returns (ConfigResponse);
+
+  // An RPC to send a batch of configuration updates in a single message.
+  rpc UpdateConfigBatch(UpdateConfigBatchRequest) returns (ReportResponse);
+}
+
+// Request message for the language detector.
+message LanguageReportRequest {
+  string pod_name = 1;
+  string container_name = 2;
+  string language = 3;
+  string node_name = 4;
+  string timestamp = 5;
+  string report_id = 6; // Unique ID for traceability
+}
+
+// Request message for a batch of language reports.
+message LanguageReportBatchRequest {
+  repeated LanguageReportRequest reports = 1;
+}
+
+// Request message for the Otel agent status.
+message AgentStatusRequest {
+  string agent_id = 1;
+  string status = 2; // e.g., "Healthy", "Unhealthy", "Degraded"
+  string message = 3;
+  string node_name = 4;
+  string timestamp = 5;
+  string report_id = 6; // Unique ID for traceability
+}
+
+// Request message for a batch of agent statuses.
+message AgentStatusBatchRequest {
+  repeated AgentStatusRequest statuses = 1;
+}
+
+// Request message for a batch of configuration updates.
+message UpdateConfigBatchRequest {
+  repeated ConfigResponse config_updates = 1;
+}
+
+// Generic request message for the ConfigUpdaterService.
+message GetConfigRequest {
+  string client_id = 1;
+  string request_id = 2; // Unique ID for traceability
+}
+
+// Response message for the ConfigUpdaterService.
+message ConfigResponse {
+  bool success = 1;
+  string config_data = 2;
+  string config_id = 3; // Unique ID for this configuration
+  string message = 4;
+}
+
+// Generic response message for other services.
+message ReportResponse {
+  bool success = 1;
+  string message = 2;
+}
