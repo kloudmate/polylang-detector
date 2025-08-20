@@ -17,9 +17,6 @@ func GetClientSet() (*kubernetes.Clientset, *rest.Config, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Warn("Warning: Could not create in-cluster config. Falling back to local kubeconfig.")
-
-		// kubeconfigPath := "C:/Users/Lenovo/.kube/config"
-
 		// Fallback to local kubeconfig.
 		kubeconfigPath := os.Getenv("KUBECONFIG")
 		if kubeconfigPath == "" {

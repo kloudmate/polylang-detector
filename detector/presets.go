@@ -1,12 +1,11 @@
 package detector
 
-var imageKeywords = map[string]string{
-	"golang":                   "Go",
-	"node":                     "Node.js",
-	"python":                   "Python",
-	"openjdk":                  "Java",
-	"java":                     "Java",
-	"mcr.microsoft.com/dotnet": "dotnet",
+var otelSupportedLanguages = map[string]string{
+	"Go":      "go",
+	"Node.js": "node",
+	"Python":  "python",
+	"Java":    "java",
+	".NET":    "dotnet",
 }
 
 var envVarKeywords = map[string]string{

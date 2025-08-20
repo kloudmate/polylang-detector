@@ -36,9 +36,7 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	wg.Add(1)
-	// workload.StartWorker(ctx, &wg, clientset, config)
 	go rpc.StartRPCClient(clientset, config, ctx)
-	// workload.AnalyzeWorkloads(ctx, detector.NewExecDetector(config, clientset))
 	sig := <-sigChan
 	wg.Done()
 	log.Printf("Received signal: %v. Initiating graceful shutdown...", sig)

@@ -33,7 +33,7 @@ func StartRPCClient(clientset *kubernetes.Clientset, config *rest.Config, ctx co
 
 	go func() {
 		var batch []detector.ContainerInfo
-		ticker := time.NewTicker(20 * time.Second)
+		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 
 		for {

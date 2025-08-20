@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/rpc"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ type ContainerInfo struct {
 	Namespace       string
 	ContainerName   string
 	Image           string
+	Kind            string
 	EnvVars         map[string]string
 	ProcessCommands []string
 	DetectedAt      time.Time
@@ -376,11 +378,13 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 	var results []ContainerInfo
 	var errQueue []error
 	for _, container := range pod.Spec.Containers {
+		ownerRef := metav1.GetControllerOf(pod)
 		info := ContainerInfo{
 			PodName:       podName,
 			Namespace:     namespace,
 			ContainerName: container.Name,
 			Image:         container.Image,
+			Kind:          ownerRef.Kind,
 			EnvVars:       make(map[string]string),
 			DetectedAt:    time.Now(),
 		}
@@ -393,9 +397,9 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 
 		runtimeEnvVars, err := eld.getRuntimeEnvironmentVariables(namespace, podName, container.Name)
 		if err != nil {
-			log.Printf("Warning: Could not get runtime env vars for %s/%s/%s: %v",
-				namespace, podName, container.Name, err)
-			errQueue = append(errQueue, fmt.Errorf("Warning: Could not get runtime env vars for %s/%s/%s: %v",
+			// log.Printf("Warning: Could not get runtime env vars for %s/%s/%s: %v",
+			// 	namespace, podName, container.Name, err)
+			errQueue = append(errQueue, fmt.Errorf("warning: could not get runtime env vars for %s/%s/%s: %v",
 				namespace, podName, container.Name, err))
 
 		} else {
@@ -406,9 +410,9 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 
 		processes, err := eld.getProcessInfo(namespace, podName, container.Name)
 		if err != nil {
-			log.Printf("Warning: Could not get process info for %s/%s/%s: %v",
-				namespace, podName, container.Name, err)
-			errQueue = append(errQueue, fmt.Errorf("Warning: Could not get runtime env vars for %s/%s/%s: %v",
+			// log.Printf("Warning: Could not get process info for %s/%s/%s: %v",
+			// 	namespace, podName, container.Name, err)
+			errQueue = append(errQueue, fmt.Errorf("warning: could not get process info for %s/%s/%s: %v",
 				namespace, podName, container.Name, err))
 		} else {
 			info.ProcessCommands = processes
@@ -429,7 +433,13 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 		}
 		results = append(results, info)
 		// Send the result to the queue for batching
-		eld.Queue <- info
+		_, ok := otelSupportedLanguages[info.Language]
+		if ok {
+			eld.Queue <- info
+		} else {
+			log.Printf("we currently don't have auto instrumentaion support for : %s Language", info.Language)
+		}
+
 	}
 	return results, nil
 }
@@ -597,8 +607,27 @@ func (eld *ExecDetector) SendBatch(batch []ContainerInfo) {
 	var reply string
 	err := eld.RpcClient.Call("RPCHandler.PushDetectionResults", batch, &reply)
 	if err != nil {
+		if err == rpc.ErrShutdown {
+			log.Printf("RPC server is shutdown : Attempting to reconnect")
+			eld.ConnectWithRetry()
+		}
 		log.Printf("Error sending batch via RPC: %v", err)
 		return
 	}
 	log.Printf("RPC call successful: %s", reply)
+}
+
+// ConnectWithRetry attempts to establish an RPC connection with exponential backoff.
+func (eld *ExecDetector) ConnectWithRetry() {
+	var err error
+	for i := 0; i < 5; i++ {
+		eld.RpcClient, err = rpc.Dial("tcp", os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
+		if err == nil {
+			log.Println("Successfully reconnected to RPC server.")
+			return
+		}
+		log.Printf("Reconnection attempt %d failed: %v", i+1, err)
+		time.Sleep(time.Duration(i+1) * time.Second) // Exponential backoff
+	}
+	log.Println("Max reconnection attempts reached. Rpc Client will remain disconnected.")
 }
