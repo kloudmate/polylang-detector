@@ -17,7 +17,9 @@ func StartWorker(ctx context.Context, wg *sync.WaitGroup, clientset *kubernetes.
 	defer wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-
+	log.Info(nil, "Starting new scan at", time.Now().Format(time.RFC3339))
+	AnalyzeWorkloads(ctx, nil)
+	log.Infof("Scan complete. Waiting for 1 minute \n")
 	// The loop will continue until the context is canceled.
 	for {
 		select {
@@ -29,7 +31,7 @@ func StartWorker(ctx context.Context, wg *sync.WaitGroup, clientset *kubernetes.
 
 		case <-ticker.C:
 			log.Info(nil, "Starting new scan at", time.Now().Format(time.RFC3339))
-			AnalyzeWorkloads(ctx, clientset, config)
+			AnalyzeWorkloads(ctx, nil)
 			log.Infof("Scan complete. Waiting for 1 minute \n")
 		}
 	}

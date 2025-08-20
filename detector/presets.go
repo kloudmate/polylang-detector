@@ -6,9 +6,6 @@ var imageKeywords = map[string]string{
 	"python":                   "Python",
 	"openjdk":                  "Java",
 	"java":                     "Java",
-	"alpine":                   "Base Image (Alpine Linux)",
-	"ubuntu":                   "Base Image (Ubuntu Linux)",
-	"busybox":                  "Base Image (BusyBox)",
 	"mcr.microsoft.com/dotnet": "dotnet",
 }
 
@@ -24,6 +21,8 @@ var envVarKeywords = map[string]string{
 	"VIRTUAL_ENV":                 "Python",
 	"PYTHONDONTWRITEBYTECODE":     "Python",
 	"JAVA_HOME":                   "Java",
+	"JAVA_TOOL_OPTIONS":           "Java",
+	"JAVA_VERSION":                "Java",
 	"JRE_HOME":                    "Java",
 	"MAVEN_HOME":                  "Java",
 	"GRADLE_HOME":                 "Java",

@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/charmbracelet/log"
+	"github.com/kloudmate/polylang-detector/rpc"
 	"github.com/kloudmate/polylang-detector/workload"
 )
 
@@ -35,11 +36,13 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	wg.Add(1)
-	go workload.StartWorker(ctx, &wg, clientset, config)
+	// workload.StartWorker(ctx, &wg, clientset, config)
+	go rpc.StartRPCClient(clientset, config, ctx)
+	// workload.AnalyzeWorkloads(ctx, detector.NewExecDetector(config, clientset))
 	sig := <-sigChan
+	wg.Done()
 	log.Printf("Received signal: %v. Initiating graceful shutdown...", sig)
+	ctx.Done()
 	cancel()
-
-	wg.Wait()
 	log.Info("Polylang Detector shutdown complete.")
 }
