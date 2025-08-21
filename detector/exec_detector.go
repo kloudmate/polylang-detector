@@ -48,6 +48,7 @@ type ContainerInfo struct {
 	Language        string
 	Framework       string
 	Confidence      string
+	DeploymentName  string
 	Evidence        []string
 }
 
@@ -65,7 +66,7 @@ type ExecDetector struct {
 type ImageInspector struct{}
 
 // isGoBinary checks an image for the presence of a Go binary signature.
-func (ii *ImageInspector) isGoBinary(ctx context.Context, imageRef string) (bool, []string, error) {
+func (ii *ImageInspector) isGoBinary(imageRef string) (bool, []string, error) {
 	var evidence []string
 
 	// Pull the image layers using crane
@@ -431,10 +432,17 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 			info.Confidence = confidence
 			info.Evidence = evidence
 		}
+		depName, err := getPodDeploymentName(eld.Clientset, namespace, podName)
+		if err != nil {
+			log.Printf("warning: could not get pod deplyment name for pod : %s ns:%s err: %v",
+				podName, namespace, err)
+
+		}
+		info.DeploymentName = depName
 		results = append(results, info)
-		// Send the result to the queue for batching
 		_, ok := otelSupportedLanguages[info.Language]
 		if ok {
+			// Send the result to the queue for batching
 			eld.Queue <- info
 		} else {
 			log.Printf("we currently don't have auto instrumentaion support for : %s Language", info.Language)
@@ -536,7 +544,7 @@ func (eld *ExecDetector) detectAdvancedLanguage(image string, envVars map[string
 	// Only perform this check if no other language could be confidently identified.
 	if len(candidates) == 0 {
 		inspector := &ImageInspector{}
-		isGo, evidenceFromScan, err := inspector.isGoBinary(context.Background(), image)
+		isGo, evidenceFromScan, err := inspector.isGoBinary(image)
 		if err != nil {
 			log.Printf("Warning: Failed to inspect image layers for Go signature: %v", err)
 		} else if isGo {
@@ -630,4 +638,40 @@ func (eld *ExecDetector) ConnectWithRetry() {
 		time.Sleep(time.Duration(i+1) * time.Second) // Exponential backoff
 	}
 	log.Println("Max reconnection attempts reached. Rpc Client will remain disconnected.")
+}
+
+// getPodDeploymentName finds the name of the deployment that owns a given pod.
+func getPodDeploymentName(clientset *kubernetes.Clientset, namespace, podName string) (string, error) {
+	// Get the pod object
+	pod, err := clientset.CoreV1().Pods(namespace).Get(context.TODO(), podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod %s: %w", podName, err)
+	}
+
+	// Find the pod's owner, which is typically a ReplicaSet, DaemonSet, or StatefulSet
+	ownerRef := metav1.GetControllerOf(pod)
+	if ownerRef == nil {
+		return "Standalone Pod", nil
+	}
+
+	// If the owner is a ReplicaSet, we need to go up one more level to find the Deployment
+	if ownerRef.Kind == "ReplicaSet" {
+		replicaSet, err := clientset.AppsV1().ReplicaSets(namespace).Get(context.TODO(), ownerRef.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("failed to get ReplicaSet %s: %w", ownerRef.Name, err)
+		}
+
+		rsOwnerRef := metav1.GetControllerOf(replicaSet)
+		if rsOwnerRef == nil {
+			return "ReplicaSet", nil // The ReplicaSet is a top-level owner
+		}
+		return rsOwnerRef.Name, nil // This will be the Deployment's name
+	}
+
+	// For DaemonSets and StatefulSets, the pod's owner is the top-level controller
+	if ownerRef.Kind == "DaemonSet" || ownerRef.Kind == "StatefulSet" {
+		return ownerRef.Name, nil
+	}
+
+	return ownerRef.Name, fmt.Errorf("unknown owner kind: %s for pod %s", ownerRef.Kind, podName)
 }

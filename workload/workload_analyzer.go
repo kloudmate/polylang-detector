@@ -3,11 +3,13 @@ package workload
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/charmbracelet/log"
 	"github.com/kloudmate/polylang-detector/detector"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -17,7 +19,13 @@ func AnalyzeWorkloads(ctx context.Context, execD *detector.ExecDetector) {
 
 // scanPods fetches all running pods and attempts to detect their language using exec.
 func ScanPods(ctx context.Context, clientset *kubernetes.Clientset, execD *detector.ExecDetector) {
-	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+
+	fieldSelector := fields.Set{
+		"spec.nodeName": os.Getenv("KM_NODE_NAME"),
+	}.String()
+	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		FieldSelector: fieldSelector,
+	})
 	if err != nil {
 		fmt.Printf("Error fetching pods: %v\n", err)
 		return
