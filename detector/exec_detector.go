@@ -380,12 +380,18 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 	var errQueue []error
 	for _, container := range pod.Spec.Containers {
 		ownerRef := metav1.GetControllerOf(pod)
+		var oKind string
+		if ownerRef == nil {
+			oKind = "Pod"
+		} else {
+			oKind = ownerRef.Kind
+		}
 		info := ContainerInfo{
 			PodName:       podName,
 			Namespace:     namespace,
 			ContainerName: container.Name,
 			Image:         container.Image,
-			Kind:          ownerRef.Kind,
+			Kind:          oKind,
 			EnvVars:       make(map[string]string),
 			DetectedAt:    time.Now(),
 		}
