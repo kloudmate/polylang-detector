@@ -2,6 +2,7 @@ package workload
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/charmbracelet/log"
 	"k8s.io/client-go/kubernetes"
@@ -16,9 +17,8 @@ func GetClientSet() (*kubernetes.Clientset, *rest.Config, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Warn("Warning: Could not create in-cluster config. Falling back to local kubeconfig.")
-
 		// Fallback to local kubeconfig.
-		kubeconfigPath := "C:/Users/Lenovo/.kube/config"
+		kubeconfigPath := os.Getenv("KUBECONFIG")
 		if kubeconfigPath == "" {
 			kubeconfigPath = clientcmd.RecommendedHomeFile
 		}

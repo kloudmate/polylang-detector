@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"log"
@@ -17,7 +16,7 @@ import (
 )
 
 // HardLanguageDetector inspects an image's layers and returns the detected language
-func HardLanguageDetector(ctx context.Context, imageName string) (string, error) {
+func HardLanguageDetector(imageName string) (string, error) {
 	ref, err := name.ParseReference(imageName)
 	if err != nil {
 		return "Unknown", fmt.Errorf("error parsing image name: %w", err)
@@ -67,6 +66,22 @@ func scanTarballForLanguage(reader io.Reader) string {
 		}
 		// Only check files, not directories
 		if header.Typeflag == tar.TypeReg {
+			if header.Typeflag == tar.TypeReg && isExecutable(header.FileInfo()) {
+				// Read the file content into a buffer
+				var fileBytes bytes.Buffer
+				if _, err := io.Copy(&fileBytes, tarReader); err != nil {
+					log.Printf("Error reading file content for %s: %v", header.Name, err)
+					continue
+				}
+
+				// Check for Go-specific signature in the binary
+				if isGoBinary(fileBytes.Bytes()) {
+					fmt.Println("Checking for go binary")
+					return "Go"
+				}
+
+				// TODO: Add checks for other compiled languages (e.g., Rust, C++)
+			}
 			// Implements heuristic based on file names
 			fileName := header.Name
 			if strings.Contains(fileName, "package.json") {
@@ -86,21 +101,7 @@ func scanTarballForLanguage(reader io.Reader) string {
 			}
 			// TODO: add more specific checks e.g., for interpreter binaries in common paths like /usr/bin/
 		}
-		if header.Typeflag == tar.TypeReg && isExecutable(header.FileInfo()) {
-			// Read the file content into a buffer
-			var fileBytes bytes.Buffer
-			if _, err := io.Copy(&fileBytes, tarReader); err != nil {
-				log.Printf("Error reading file content for %s: %v", header.Name, err)
-				continue
-			}
 
-			// Check for Go-specific signature in the binary
-			if isGoBinary(fileBytes.Bytes()) {
-				return "Go"
-			}
-
-			// TODO: Add checks for other compiled languages (e.g., Rust, C++)
-		}
 	}
 	return "Unknown"
 }

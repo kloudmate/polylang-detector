@@ -9,7 +9,7 @@ import (
 // SoftLanguageDetector infers the programming language from a container's exec command,
 // image name, or environment variables.
 // This is a best-effort approach based on common keywords.
-func SoftLanguageDetector(image string, envVars []corev1.EnvVar, execCmd []string) string {
+func SoftLanguageDetector(image string, envVars []corev1.EnvVar, execCmd []string, container corev1.Container) string {
 	if len(execCmd) > 0 {
 		lowerCmd := strings.ToLower(execCmd[0])
 		if strings.Contains(lowerCmd, "python") {
@@ -29,11 +29,6 @@ func SoftLanguageDetector(image string, envVars []corev1.EnvVar, execCmd []strin
 		}
 		// Fallback check for Go: look for a .go file in the arguments.
 		// This is a more specific and reliable heuristic than a generic binary name.
-		for _, arg := range execCmd {
-			if strings.HasSuffix(strings.ToLower(arg), ".go") {
-				return "Go"
-			}
-		}
 	}
 
 	lowerImage := strings.ToLower(image)
@@ -55,27 +50,6 @@ func SoftLanguageDetector(image string, envVars []corev1.EnvVar, execCmd []strin
 		if strings.Contains(lowerImage, keyword) {
 			return language
 		}
-	}
-
-	// if no language is found in the image name, check environment variables.
-	envVarKeywords := map[string]string{
-		"GODEBUG":                     "Go",
-		"GOENV":                       "Go",
-		"GOOS":                        "Go",
-		"GOPATH":                      "Go",
-		"NODE_ENV":                    "Node.js",
-		"NPM_CONFIG":                  "Node.js",
-		"npm_package_":                "Node.js",
-		"PYTHONPATH":                  "Python",
-		"VIRTUAL_ENV":                 "Python",
-		"PYTHONDONTWRITEBYTECODE":     "Python",
-		"JAVA_HOME":                   "Java",
-		"JRE_HOME":                    "Java",
-		"MAVEN_HOME":                  "Java",
-		"GRADLE_HOME":                 "Java",
-		"CLASSPATH":                   "Java",
-		"ASPNETCORE_URLS":             ".NET",
-		"DOTNET_RUNNING_IN_CONTAINER": ".NET",
 	}
 
 	for _, envVar := range envVars {
