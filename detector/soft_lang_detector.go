@@ -40,9 +40,6 @@ func SoftLanguageDetector(image string, envVars []corev1.EnvVar, execCmd []strin
 		"python":                   "Python",
 		"openjdk":                  "Java",
 		"java":                     "Java",
-		"alpine":                   "Base Image (Alpine Linux)",
-		"ubuntu":                   "Base Image (Ubuntu Linux)",
-		"busybox":                  "Base Image (BusyBox)",
 		"mcr.microsoft.com/dotnet": "dotnet",
 	}
 
