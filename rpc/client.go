@@ -26,11 +26,15 @@ func StartRPCClient(clientset *kubernetes.Clientset, config *rest.Config, ctx co
 	// Connect to RPC server
 	client, err := rpc.Dial("tcp", os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
 	if err != nil {
-		if err == rpc.ErrShutdown {
-			log.Printf("RPC server is shutdown : Attempting to reconnect")
-			execDetector.ConnectWithRetry()
+		log.Printf("failed to RPC server : %v", err)
+		log.Printf("attempting to reconnect")
+		for {
+			connected := execDetector.ConnectWithRetry()
+			if connected {
+				break
+			}
 		}
-		log.Fatalf("Error connecting to RPC server: %v", err)
+
 	}
 	execDetector.RpcClient = client
 	defer client.Close()

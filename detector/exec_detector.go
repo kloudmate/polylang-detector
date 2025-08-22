@@ -47,6 +47,7 @@ type ContainerInfo struct {
 	DetectedAt      time.Time
 	Language        string
 	Framework       string
+	Enabled         bool
 	Confidence      string
 	DeploymentName  string
 	Evidence        []string
@@ -444,6 +445,7 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 				podName, namespace, err)
 
 		}
+		info.Enabled = IsResourceInstrumented(eld.Clientset, namespace, info.Kind, depName)
 		info.DeploymentName = depName
 		results = append(results, info)
 		_, ok := otelSupportedLanguages[info.Language]
@@ -456,6 +458,36 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 
 	}
 	return results, nil
+}
+
+func IsResourceInstrumented(client *kubernetes.Clientset, ns, kind, name string) bool {
+	k := strings.ToUpper(kind)
+	crd := os.Getenv("KM_CRD_NAME")
+	if crd == "" {
+		crd = "km-agent-instrumentation-crd"
+	}
+	switch k {
+	case "DAEMONSET":
+		cfg, err := client.AppsV1().DaemonSets(ns).Get(context.TODO(), name, metav1.GetOptions{})
+		if err != nil {
+			log.Printf("failed to fetch daemonset in namespace %s: %v", ns, err)
+		}
+		return isOtelInstrumented(cfg.Spec.Template.Annotations, ns, crd)
+	case "DEPLOYMENT":
+		cfg, err := client.AppsV1().Deployments(ns).Get(context.TODO(), name, metav1.GetOptions{})
+		if err != nil {
+			log.Printf("failed to fetch deployment in namespace %s: %v", ns, err)
+		}
+		return isOtelInstrumented(cfg.Spec.Template.Annotations, ns, crd)
+	case "STATEFULSET":
+		cfg, err := client.AppsV1().StatefulSets(ns).Get(context.TODO(), name, metav1.GetOptions{})
+		if err != nil {
+			log.Printf("failed to fetch stateful in namespace %s: %v", ns, err)
+		}
+		return isOtelInstrumented(cfg.Spec.Template.Annotations, ns, crd)
+
+	}
+	return false
 }
 
 func (eld *ExecDetector) detectAdvancedLanguage(image string, envVars map[string]string, processes []string) (string, string, string, []string) {
@@ -623,7 +655,10 @@ func (eld *ExecDetector) SendBatch(batch []ContainerInfo) {
 	if err != nil {
 		if err == rpc.ErrShutdown {
 			log.Printf("RPC server is shutdown : Attempting to reconnect")
-			eld.ConnectWithRetry()
+			if eld.ConnectWithRetry() {
+				// reconnected with the server retry to send the batch
+				eld.SendBatch(batch)
+			}
 		}
 		log.Printf("Error sending batch via RPC: %v", err)
 		return
@@ -632,18 +667,19 @@ func (eld *ExecDetector) SendBatch(batch []ContainerInfo) {
 }
 
 // ConnectWithRetry attempts to establish an RPC connection with exponential backoff.
-func (eld *ExecDetector) ConnectWithRetry() {
+func (eld *ExecDetector) ConnectWithRetry() bool {
 	var err error
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 15; i++ {
 		eld.RpcClient, err = rpc.Dial("tcp", os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
 		if err == nil {
 			log.Println("Successfully reconnected to RPC server.")
-			return
+			return true
 		}
 		log.Printf("Reconnection attempt %d failed: %v", i+1, err)
 		time.Sleep(time.Duration(i+1) * time.Second) // Exponential backoff
 	}
 	log.Println("Max reconnection attempts reached. Rpc Client will remain disconnected.")
+	return false
 }
 
 // getPodDeploymentName finds the name of the deployment that owns a given pod.
@@ -671,7 +707,7 @@ func getPodDeploymentName(clientset *kubernetes.Clientset, namespace, podName st
 		if rsOwnerRef == nil {
 			return "ReplicaSet", nil // The ReplicaSet is a top-level owner
 		}
-		return rsOwnerRef.Name, nil // This will be the Deployment's name
+		return rsOwnerRef.Name, nil
 	}
 
 	// For DaemonSets and StatefulSets, the pod's owner is the top-level controller
@@ -680,4 +716,16 @@ func getPodDeploymentName(clientset *kubernetes.Clientset, namespace, podName st
 	}
 
 	return ownerRef.Name, fmt.Errorf("unknown owner kind: %s for pod %s", ownerRef.Kind, podName)
+}
+
+func isOtelInstrumented(annotations map[string]string, ns, crd string) bool {
+	for k, v := range annotations {
+		if strings.HasPrefix(k, "instrumentation.opentelemetry.io/inject-") && !strings.HasPrefix(v, "false") ||
+			strings.HasPrefix(k, "instrumentation.opentelemetry.io/inject-") && strings.HasPrefix(v, fmt.Sprintf("%s/%s", ns, crd)) {
+			return true
+		} else {
+			fmt.Print("Not Instrumented")
+		}
+	}
+	return false
 }
