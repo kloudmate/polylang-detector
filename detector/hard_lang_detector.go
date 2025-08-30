@@ -76,7 +76,6 @@ func scanTarballForLanguage(reader io.Reader) string {
 
 				// Check for Go-specific signature in the binary
 				if isGoBinary(fileBytes.Bytes()) {
-					fmt.Println("Checking for go binary")
 					return "Go"
 				}
 
