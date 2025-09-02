@@ -16,7 +16,7 @@ func SoftLanguageDetector(image string, envVars []corev1.EnvVar, execCmd []strin
 			return "Python"
 		}
 		if strings.Contains(lowerCmd, "node") || strings.Contains(lowerCmd, "npm") {
-			return "Node.js"
+			return "nodejs"
 		}
 		if strings.Contains(lowerCmd, "java") {
 			return "Java"
@@ -36,7 +36,7 @@ func SoftLanguageDetector(image string, envVars []corev1.EnvVar, execCmd []strin
 	// check for keywords in the image name.
 	imageKeywords := map[string]string{
 		"golang":                   "Go",
-		"node":                     "Node.js",
+		"node":                     "nodejs",
 		"python":                   "Python",
 		"openjdk":                  "Java",
 		"java":                     "Java",

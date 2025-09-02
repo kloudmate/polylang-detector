@@ -84,7 +84,7 @@ func scanTarballForLanguage(reader io.Reader) string {
 			// Implements heuristic based on file names
 			fileName := header.Name
 			if strings.Contains(fileName, "package.json") {
-				return "Node.js"
+				return "nodejs"
 			}
 			if strings.Contains(fileName, "go.mod") {
 				return "Go"

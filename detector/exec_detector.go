@@ -163,7 +163,7 @@ var advancedLanguageRules = []LanguageDetectionRule{
 		},
 	},
 	{
-		Language:   "Node.js",
+		Language:   "nodejs",
 		Confidence: "medium",
 		Priority:   5,
 		ImagePatterns: []string{
@@ -623,14 +623,14 @@ func (eld *PolylangDetector) detectAdvancedLanguage(image string, envVars map[st
 
 func (eld *PolylangDetector) extractVersion(envVars map[string]string, language string) string {
 	versionKeys := map[string][]string{
-		"Java":    {"JAVA_VERSION", "JDK_VERSION", "OPENJDK_VERSION"},
-		"Node.js": {"NODE_VERSION", "NPM_VERSION"},
-		"Python":  {"PYTHON_VERSION", "PY_VERSION"},
-		"Go":      {"GO_VERSION", "GOLANG_VERSION"},
-		"Ruby":    {"RUBY_VERSION", "RBENV_VERSION"},
-		"PHP":     {"PHP_VERSION"},
-		"Rust":    {"RUST_VERSION", "RUSTC_VERSION"},
-		".NET":    {"DOTNET_VERSION", "ASPNETCORE_VERSION"},
+		"Java":   {"JAVA_VERSION", "JDK_VERSION", "OPENJDK_VERSION"},
+		"nodejs": {"NODE_VERSION", "NPM_VERSION"},
+		"Python": {"PYTHON_VERSION", "PY_VERSION"},
+		"Go":     {"GO_VERSION", "GOLANG_VERSION"},
+		"Ruby":   {"RUBY_VERSION", "RBENV_VERSION"},
+		"PHP":    {"PHP_VERSION"},
+		"Rust":   {"RUST_VERSION", "RUSTC_VERSION"},
+		".NET":   {"DOTNET_VERSION", "ASPNETCORE_VERSION"},
 	}
 
 	if keys, exists := versionKeys[language]; exists {
