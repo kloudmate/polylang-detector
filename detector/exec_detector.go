@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/crane"
+	"go.uber.org/zap"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -53,14 +54,17 @@ type ContainerInfo struct {
 	Evidence        []string
 }
 
-// ExecDetector contains the Kubernetes client to interact with the cluster.
-type ExecDetector struct {
-	Clientset  *kubernetes.Clientset
-	Config     *rest.Config
-	RpcClient  *rpc.Client
-	Queue      chan ContainerInfo
-	QueueSize  int
-	BatchMutex sync.Mutex
+// PolylangDetector contains the Kubernetes client to interact with the cluster.
+type PolylangDetector struct {
+	Clientset         *kubernetes.Clientset
+	Config            *rest.Config
+	RpcClient         *rpc.Client
+	ServerAddr        string
+	Logger            *zap.Logger
+	IgnoredNamespaces []string
+	Queue             chan ContainerInfo
+	QueueSize         int
+	BatchMutex        sync.Mutex
 }
 
 // ImageInspector provides methods for investigating container images.
@@ -159,7 +163,7 @@ var advancedLanguageRules = []LanguageDetectionRule{
 		},
 	},
 	{
-		Language:   "Node.js",
+		Language:   "nodejs",
 		Confidence: "medium",
 		Priority:   5,
 		ImagePatterns: []string{
@@ -283,7 +287,7 @@ var advancedLanguageRules = []LanguageDetectionRule{
 	},
 }
 
-func (eld *ExecDetector) getRuntimeEnvironmentVariables(namespace, podName, containerName string) (map[string]string, error) {
+func (eld *PolylangDetector) getRuntimeEnvironmentVariables(namespace, podName, containerName string) (map[string]string, error) {
 	envVars, err := eld.execCommandInPod(namespace, podName, containerName, []string{"env"})
 	if err != nil {
 		envVars, err = eld.execCommandInPod(namespace, podName, containerName, []string{"sh", "-c", "env"})
@@ -294,7 +298,7 @@ func (eld *ExecDetector) getRuntimeEnvironmentVariables(namespace, podName, cont
 	return eld.parseEnvOutput(envVars), nil
 }
 
-func (eld *ExecDetector) execCommandInPod(namespace, podName, containerName string, command []string) (string, error) {
+func (eld *PolylangDetector) execCommandInPod(namespace, podName, containerName string, command []string) (string, error) {
 	req := eld.Clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -326,7 +330,7 @@ func (eld *ExecDetector) execCommandInPod(namespace, podName, containerName stri
 	return stdout.String(), nil
 }
 
-func (eld *ExecDetector) parseEnvOutput(envOutput string) map[string]string {
+func (eld *PolylangDetector) parseEnvOutput(envOutput string) map[string]string {
 	envVars := make(map[string]string)
 	lines := strings.Split(strings.TrimSpace(envOutput), "\n")
 	for _, line := range lines {
@@ -341,7 +345,7 @@ func (eld *ExecDetector) parseEnvOutput(envOutput string) map[string]string {
 	return envVars
 }
 
-func (eld *ExecDetector) getProcessInfo(namespace, podName, containerName string) ([]string, error) {
+func (eld *PolylangDetector) getProcessInfo(namespace, podName, containerName string) ([]string, error) {
 	processes, err := eld.execCommandInPod(namespace, podName, containerName, []string{"ps", "aux"})
 	if err != nil {
 		processes, err = eld.execCommandInPod(namespace, podName, containerName, []string{"ps", "-ef"})
@@ -355,7 +359,7 @@ func (eld *ExecDetector) getProcessInfo(namespace, podName, containerName string
 	return eld.parseProcessOutput(processes), nil
 }
 
-func (eld *ExecDetector) parseProcessOutput(processOutput string) []string {
+func (eld *PolylangDetector) parseProcessOutput(processOutput string) []string {
 	var commands []string
 	lines := strings.Split(strings.TrimSpace(processOutput), "\n")
 	for i, line := range lines {
@@ -371,7 +375,7 @@ func (eld *ExecDetector) parseProcessOutput(processOutput string) []string {
 	return commands
 }
 
-func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string) ([]ContainerInfo, error) {
+func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName string) ([]ContainerInfo, error) {
 	pod, err := eld.Clientset.CoreV1().Pods(namespace).Get(context.TODO(), podName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod: %w", err)
@@ -445,7 +449,7 @@ func (eld *ExecDetector) DetectLanguageWithRuntimeInfo(namespace, podName string
 				podName, namespace, err)
 
 		}
-		info.Enabled = IsResourceInstrumented(eld.Clientset, namespace, info.Kind, depName)
+		// info.Enabled = IsResourceInstrumented(eld.Clientset, namespace, info.Kind, depName)
 		info.DeploymentName = depName
 		results = append(results, info)
 		_, ok := otelSupportedLanguages[info.Language]
@@ -490,7 +494,7 @@ func IsResourceInstrumented(client *kubernetes.Clientset, ns, kind, name string)
 	return false
 }
 
-func (eld *ExecDetector) detectAdvancedLanguage(image string, envVars map[string]string, processes []string) (string, string, string, []string) {
+func (eld *PolylangDetector) detectAdvancedLanguage(image string, envVars map[string]string, processes []string) (string, string, string, []string) {
 	var candidates []struct {
 		language   string
 		framework  string
@@ -617,16 +621,16 @@ func (eld *ExecDetector) detectAdvancedLanguage(image string, envVars map[string
 	return bestCandidate.language, bestCandidate.framework, bestCandidate.confidence, bestCandidate.evidence
 }
 
-func (eld *ExecDetector) extractVersion(envVars map[string]string, language string) string {
+func (eld *PolylangDetector) extractVersion(envVars map[string]string, language string) string {
 	versionKeys := map[string][]string{
-		"Java":    {"JAVA_VERSION", "JDK_VERSION", "OPENJDK_VERSION"},
-		"Node.js": {"NODE_VERSION", "NPM_VERSION"},
-		"Python":  {"PYTHON_VERSION", "PY_VERSION"},
-		"Go":      {"GO_VERSION", "GOLANG_VERSION"},
-		"Ruby":    {"RUBY_VERSION", "RBENV_VERSION"},
-		"PHP":     {"PHP_VERSION"},
-		"Rust":    {"RUST_VERSION", "RUSTC_VERSION"},
-		".NET":    {"DOTNET_VERSION", "ASPNETCORE_VERSION"},
+		"Java":   {"JAVA_VERSION", "JDK_VERSION", "OPENJDK_VERSION"},
+		"nodejs": {"NODE_VERSION", "NPM_VERSION"},
+		"Python": {"PYTHON_VERSION", "PY_VERSION"},
+		"Go":     {"GO_VERSION", "GOLANG_VERSION"},
+		"Ruby":   {"RUBY_VERSION", "RBENV_VERSION"},
+		"PHP":    {"PHP_VERSION"},
+		"Rust":   {"RUST_VERSION", "RUSTC_VERSION"},
+		".NET":   {"DOTNET_VERSION", "ASPNETCORE_VERSION"},
 	}
 
 	if keys, exists := versionKeys[language]; exists {
@@ -639,47 +643,40 @@ func (eld *ExecDetector) extractVersion(envVars map[string]string, language stri
 	return ""
 }
 
-func NewExecDetector(config *rest.Config, client *kubernetes.Clientset) *ExecDetector {
-	return &ExecDetector{
-		Clientset: client,
-		Config:    config,
-		Queue:     make(chan ContainerInfo, 100), // Queue with a capacity of 100
-		QueueSize: 5,                             // Batch size
-
+func NewPolylangDetector(config *rest.Config, client *kubernetes.Clientset) *PolylangDetector {
+	addr := string(os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
+	nsEnv := string(os.Getenv("KM_IGNORED_NS"))
+	ignoredNs := strings.Split(nsEnv, ",")
+	loggerConfig := zap.NewProductionConfig()
+	logger, _ := loggerConfig.Build()
+	return &PolylangDetector{
+		Clientset:         client,
+		Config:            config,
+		IgnoredNamespaces: ignoredNs,
+		ServerAddr:        addr,
+		Logger:            logger,
+		Queue:             make(chan ContainerInfo, 100), // Queue with a capacity of 100
+		QueueSize:         5,                             // Batch size
 	}
 }
 
-func (eld *ExecDetector) SendBatch(batch []ContainerInfo) {
+func (pd *PolylangDetector) SendBatch(batch []ContainerInfo) {
 	var reply string
-	err := eld.RpcClient.Call("RPCHandler.PushDetectionResults", batch, &reply)
-	if err != nil {
-		if err == rpc.ErrShutdown {
-			log.Printf("RPC server is shutdown : Attempting to reconnect")
-			if eld.ConnectWithRetry() {
-				// reconnected with the server retry to send the batch
-				eld.SendBatch(batch)
+	if pd.RpcClient != nil {
+		err := pd.RpcClient.Call("RPCHandler.PushDetectionResults", batch, &reply)
+		if err != nil {
+			log.Printf("Error sending batch via RPC: %v", err)
+			if err := pd.DialWithRetry(context.TODO(), time.Second*10); err != nil {
+				log.Fatalf("cannot establish connection with the config updater :%v", err)
 			}
+			return
 		}
-		log.Printf("Error sending batch via RPC: %v", err)
-		return
+	} else {
+		if err := pd.DialWithRetry(context.TODO(), time.Second*10); err != nil {
+			log.Fatalf("cannot establish connection with the config updater :%v", err)
+		}
 	}
 	log.Printf("RPC call successful: %s", reply)
-}
-
-// ConnectWithRetry attempts to establish an RPC connection with exponential backoff.
-func (eld *ExecDetector) ConnectWithRetry() bool {
-	var err error
-	for i := 0; i < 15; i++ {
-		eld.RpcClient, err = rpc.Dial("tcp", os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
-		if err == nil {
-			log.Println("Successfully reconnected to RPC server.")
-			return true
-		}
-		log.Printf("Reconnection attempt %d failed: %v", i+1, err)
-		time.Sleep(time.Duration(i+1) * time.Second) // Exponential backoff
-	}
-	log.Println("Max reconnection attempts reached. Rpc Client will remain disconnected.")
-	return false
 }
 
 // getPodDeploymentName finds the name of the deployment that owns a given pod.

@@ -1,11 +1,11 @@
 package detector
 
 var otelSupportedLanguages = map[string]string{
-	"Go":      "go",
-	"Node.js": "node",
-	"Python":  "python",
-	"Java":    "java",
-	".NET":    "dotnet",
+	"Go":     "go",
+	"nodejs": "node",
+	"Python": "python",
+	"Java":   "java",
+	".NET":   "dotnet",
 }
 
 var envVarKeywords = map[string]string{

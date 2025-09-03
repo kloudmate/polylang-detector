@@ -76,7 +76,6 @@ func scanTarballForLanguage(reader io.Reader) string {
 
 				// Check for Go-specific signature in the binary
 				if isGoBinary(fileBytes.Bytes()) {
-					fmt.Println("Checking for go binary")
 					return "Go"
 				}
 
@@ -85,7 +84,7 @@ func scanTarballForLanguage(reader io.Reader) string {
 			// Implements heuristic based on file names
 			fileName := header.Name
 			if strings.Contains(fileName, "package.json") {
-				return "Node.js"
+				return "nodejs"
 			}
 			if strings.Contains(fileName, "go.mod") {
 				return "Go"

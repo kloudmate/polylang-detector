@@ -2,74 +2,54 @@ package rpc
 
 import (
 	"context"
-	"log"
-	"net/rpc"
-	"os"
+	"sync"
 	"time"
 
 	"github.com/kloudmate/polylang-detector/detector"
-	"github.com/kloudmate/polylang-detector/workload"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
-// StartRPCClient is the startup function for the RPC client.
-func StartRPCClient(clientset *kubernetes.Clientset, config *rest.Config, ctx context.Context) {
+// SendDataToUpdater is the startup function for the RPC client.
+func SendDataToUpdater(pd *detector.PolylangDetector, clientset *kubernetes.Clientset, config *rest.Config, ctx context.Context, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+	var batch []detector.ContainerInfo
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
-	execDetector := &detector.ExecDetector{
-		Clientset: clientset,
-		Config:    config,
-		Queue:     make(chan detector.ContainerInfo, 100), // Queue with a capacity of 100
-		QueueSize: 5,                                      // Batch size
+	for {
+		select {
+		case result := <-pd.Queue:
+			pd.BatchMutex.Lock()
+			batch = append(batch, result)
+			pd.BatchMutex.Unlock()
+			if len(batch) >= pd.QueueSize {
+				pd.Logger.Sugar().Infof("sending apm data as max queue size reached")
+				pd.SendBatch(batch)
+				batch = nil
+			} else {
+				pd.Logger.Sugar().Infof("skipping sending apm data to updater due to less queue size")
+			}
+		case <-ctx.Done():
+			// Keep the client running for a while to allow all batch of deployments to be sent
+			pd.Logger.Sugar().Infof("sending all pending data to updater before exiting")
+			pd.BatchMutex.Lock()
+			pd.SendBatch(batch)
+			pd.BatchMutex.Unlock()
+			pd.RpcClient.Close()
+			return
+		case <-ticker.C:
+			pd.BatchMutex.Lock()
+			if len(batch) > 0 {
+				pd.Logger.Sugar().Infof("sending apm data as waiting duration expired")
+				pd.SendBatch(batch)
+				batch = nil
+			} else {
+				pd.Logger.Sugar().Infof("no apm data available to send to the updater")
+			}
+			pd.BatchMutex.Unlock()
+		}
 	}
 
-	// Connect to RPC server
-	client, err := rpc.Dial("tcp", os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
-	if err != nil {
-		log.Printf("failed to RPC server : %v", err)
-		log.Printf("attempting to reconnect")
-		for {
-			connected := execDetector.ConnectWithRetry()
-			if connected {
-				break
-			}
-		}
-
-	}
-	execDetector.RpcClient = client
-	defer client.Close()
-
-	go func() {
-		var batch []detector.ContainerInfo
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case result := <-execDetector.Queue:
-				execDetector.BatchMutex.Lock()
-				batch = append(batch, result)
-				execDetector.BatchMutex.Unlock()
-				if len(batch) >= execDetector.QueueSize {
-					execDetector.SendBatch(batch)
-					batch = nil
-				}
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				execDetector.BatchMutex.Lock()
-				if len(batch) > 0 {
-					execDetector.SendBatch(batch)
-					batch = nil
-				}
-				execDetector.BatchMutex.Unlock()
-			}
-		}
-	}()
-
-	// Example usage: Simulate detecting multiple pods
-	workload.AnalyzeWorkloads(ctx, execDetector)
-
-	// Keep the client running for a while to allow all batch of deployments to be sent
-	time.Sleep(30 * time.Second)
 }
