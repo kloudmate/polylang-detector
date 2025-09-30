@@ -54,7 +54,8 @@ func ScanPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detector
 
 			containerInfos, err := pd.DetectLanguageWithRuntimeInfo(pod.Namespace, pod.Name)
 			if err != nil {
-				log.Fatalf("Error detecting language: %v", err)
+				log.Errorf("Error detecting language for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+				continue
 			}
 			for _, info := range containerInfos {
 				pd.Logger.Sugar().Infow("workload analyzer",
