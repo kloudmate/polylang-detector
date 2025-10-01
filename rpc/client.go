@@ -23,30 +23,42 @@ func SendDataToUpdater(pd *detector.PolylangDetector, clientset *kubernetes.Clie
 		case result := <-pd.Queue:
 			pd.BatchMutex.Lock()
 			batch = append(batch, result)
+			currentSize := len(batch)
 			pd.BatchMutex.Unlock()
-			if len(batch) >= pd.QueueSize {
-				pd.Logger.Sugar().Infof("sending apm data as max queue size reached")
+
+			if currentSize >= pd.QueueSize {
+				pd.DomainLogger.(interface {
+					RPCBatchSending(count int, reason string)
+				}).RPCBatchSending(currentSize, "queue_size_threshold_reached")
 				pd.SendBatch(batch)
 				batch = nil
 			} else {
-				pd.Logger.Sugar().Infof("skipping sending apm data to updater due to less queue size")
+				pd.DomainLogger.(interface {
+					RPCBatchQueued(batchSize, queueSize int)
+				}).RPCBatchQueued(currentSize, pd.QueueSize)
 			}
 		case <-ctx.Done():
 			// Keep the client running for a while to allow all batch of deployments to be sent
-			pd.Logger.Sugar().Infof("sending all pending data to updater before exiting")
 			pd.BatchMutex.Lock()
-			pd.SendBatch(batch)
+			if len(batch) > 0 {
+				pd.DomainLogger.(interface {
+					RPCBatchSending(count int, reason string)
+				}).RPCBatchSending(len(batch), "application_shutdown")
+				pd.SendBatch(batch)
+			}
 			pd.BatchMutex.Unlock()
-			pd.RpcClient.Close()
+			if pd.RpcClient != nil {
+				pd.RpcClient.Close()
+			}
 			return
 		case <-ticker.C:
 			pd.BatchMutex.Lock()
 			if len(batch) > 0 {
-				pd.Logger.Sugar().Infof("sending apm data as waiting duration expired")
+				pd.DomainLogger.(interface {
+					RPCBatchSending(count int, reason string)
+				}).RPCBatchSending(len(batch), "periodic_flush_interval")
 				pd.SendBatch(batch)
 				batch = nil
-			} else {
-				pd.Logger.Sugar().Infof("no apm data available to send to the updater")
 			}
 			pd.BatchMutex.Unlock()
 		}
