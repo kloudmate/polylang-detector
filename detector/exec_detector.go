@@ -54,6 +54,15 @@ type ContainerInfo struct {
 	Evidence        []string
 }
 
+// DetectionResult represents the result of language detection
+type DetectionResult struct {
+	Language   string
+	Framework  string
+	Confidence string
+	Evidence   []string
+	Tier       string // Which detection tier found the result
+}
+
 // PolylangDetector contains the Kubernetes client to interact with the cluster.
 type PolylangDetector struct {
 	Clientset         *kubernetes.Clientset
@@ -395,6 +404,11 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
 
+	// Initialize inspectors
+	metadataInspector := NewMetadataInspector(eld.Clientset)
+	imageAnalyzer := &ImageAnalyzer{}
+	runtimeInspector := &RuntimeInspector{}
+
 	var results []ContainerInfo
 	var errQueue []error
 	for _, container := range pod.Spec.Containers {
@@ -453,42 +467,173 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 
 		eld.DomainLogger.CacheMiss(container.Image)
 
-		runtimeEnvVars, err := eld.getRuntimeEnvironmentVariables(namespace, podName, container.Name)
-		if err != nil {
-			// log.Printf("Warning: Could not get runtime env vars for %s/%s/%s: %v",
-			// 	namespace, podName, container.Name, err)
-			errQueue = append(errQueue, fmt.Errorf("warning: could not get runtime env vars for %s/%s/%s: %v",
-				namespace, podName, container.Name, err))
+		// ============================================
+		// TIER 1: Kubernetes Metadata (Fast, No Exec)
+		// ============================================
+		var detectionResult DetectionResult
 
-		} else {
-			for k, v := range runtimeEnvVars {
-				info.EnvVars[k] = v
+		// Check pod annotations first
+		lang, fw, conf, evidence := metadataInspector.InspectPodAnnotations(pod)
+		if lang != "" {
+			detectionResult = DetectionResult{
+				Language:   lang,
+				Framework:  fw,
+				Confidence: conf,
+				Evidence:   evidence,
+				Tier:       "metadata-annotations",
 			}
 		}
 
-		processes, err := eld.getProcessInfo(namespace, podName, container.Name)
-		if err != nil {
-			// log.Printf("Warning: Could not get process info for %s/%s/%s: %v",
-			// 	namespace, podName, container.Name, err)
-			errQueue = append(errQueue, fmt.Errorf("warning: could not get process info for %s/%s/%s: %v",
-				namespace, podName, container.Name, err))
-		} else {
-			info.ProcessCommands = processes
+		// Check container environment variables from spec (no exec needed)
+		if detectionResult.Language == "" {
+			lang, evidence := metadataInspector.InspectEnvironmentVariables(container)
+			if lang != "" {
+				detectionResult = DetectionResult{
+					Language:   lang,
+					Confidence: "medium",
+					Evidence:   evidence,
+					Tier:       "metadata-envvars",
+				}
+			}
 		}
-		if len(errQueue) > 0 {
 
-			info.Language, _ = HardLanguageDetector(container.Image)
-			results = append(results, info)
-		} else {
-
-			language, framework, confidence, evidence := eld.detectAdvancedLanguage(
-				container.Image, info.EnvVars, info.ProcessCommands)
-
-			info.Language = language
-			info.Framework = framework
-			info.Confidence = confidence
-			info.Evidence = evidence
+		// ============================================
+		// TIER 2: Image Name Analysis (Fast)
+		// ============================================
+		if detectionResult.Language == "" || detectionResult.Confidence == "low" {
+			lang, fw, conf, evidence := imageAnalyzer.AnalyzeImageName(container.Image)
+			if lang != "" && (detectionResult.Language == "" || conf == "high") {
+				detectionResult = DetectionResult{
+					Language:   lang,
+					Framework:  fw,
+					Confidence: conf,
+					Evidence:   append(detectionResult.Evidence, evidence...),
+					Tier:       "image-name",
+				}
+			}
 		}
+
+		// ============================================
+		// TIER 3: Runtime Inspection (Slower, Requires Exec)
+		// ============================================
+		if detectionResult.Confidence != "high" {
+			// Get runtime environment variables
+			runtimeEnvVars, err := eld.getRuntimeEnvironmentVariables(namespace, podName, container.Name)
+			if err == nil {
+				for k, v := range runtimeEnvVars {
+					info.EnvVars[k] = v
+				}
+			} else {
+				errQueue = append(errQueue, fmt.Errorf("warning: could not get runtime env vars for %s/%s/%s: %v",
+					namespace, podName, container.Name, err))
+			}
+
+			// Get process information
+			processes, err := eld.getProcessInfo(namespace, podName, container.Name)
+			if err == nil {
+				info.ProcessCommands = processes
+
+				// Analyze processes with enhanced pattern matching
+				lang, fw, conf, evidence := runtimeInspector.AnalyzeProcesses(processes)
+				if lang != "" {
+					detectionResult = DetectionResult{
+						Language:   lang,
+						Framework:  fw,
+						Confidence: conf,
+						Evidence:   append(detectionResult.Evidence, evidence...),
+						Tier:       "runtime-process",
+					}
+				}
+			} else {
+				errQueue = append(errQueue, fmt.Errorf("warning: could not get process info for %s/%s/%s: %v",
+					namespace, podName, container.Name, err))
+			}
+
+			// Try filesystem signature detection if we still don't have high confidence
+			if detectionResult.Confidence != "high" {
+				lang, conf, evidence := runtimeInspector.DetectFileSystemSignatures(
+					namespace, podName, container.Name, eld.execCommandInPod)
+				if lang != "" {
+					detectionResult = DetectionResult{
+						Language:   lang,
+						Confidence: conf,
+						Evidence:   append(detectionResult.Evidence, evidence...),
+						Tier:       "runtime-filesystem",
+					}
+				}
+			}
+
+			// Try package manager detection
+			if detectionResult.Confidence != "high" {
+				lang, conf, evidence := runtimeInspector.DetectPackageManagers(
+					namespace, podName, container.Name, eld.execCommandInPod)
+				if lang != "" {
+					detectionResult = DetectionResult{
+						Language:   lang,
+						Confidence: conf,
+						Evidence:   append(detectionResult.Evidence, evidence...),
+						Tier:       "runtime-package-manager",
+					}
+				}
+			}
+
+			// Try binary analysis
+			if detectionResult.Confidence != "high" {
+				lang, conf, evidence := runtimeInspector.DetectBinarySignature(
+					namespace, podName, container.Name, eld.execCommandInPod)
+				if lang != "" {
+					detectionResult = DetectionResult{
+						Language:   lang,
+						Confidence: conf,
+						Evidence:   append(detectionResult.Evidence, evidence...),
+						Tier:       "runtime-binary-analysis",
+					}
+				}
+			}
+
+			// Try port-based detection as last resort
+			if detectionResult.Confidence != "high" {
+				lang, fw, conf, evidence := runtimeInspector.DetectByPort(
+					namespace, podName, container.Name, eld.execCommandInPod)
+				if lang != "" {
+					detectionResult = DetectionResult{
+						Language:   lang,
+						Framework:  fw,
+						Confidence: conf,
+						Evidence:   append(detectionResult.Evidence, evidence...),
+						Tier:       "runtime-port-detection",
+					}
+				}
+			}
+		}
+
+		// ============================================
+		// FALLBACK: Old detection method
+		// ============================================
+		if detectionResult.Language == "" {
+			// Fall back to legacy detection
+			if len(errQueue) > 0 {
+				detectionResult.Language, _ = HardLanguageDetector(container.Image)
+				detectionResult.Confidence = "low"
+				detectionResult.Tier = "fallback-hard-detector"
+			} else {
+				language, framework, confidence, evidence := eld.detectAdvancedLanguage(
+					container.Image, info.EnvVars, info.ProcessCommands)
+				detectionResult = DetectionResult{
+					Language:   language,
+					Framework:  framework,
+					Confidence: confidence,
+					Evidence:   evidence,
+					Tier:       "fallback-advanced",
+				}
+			}
+		}
+
+		// Apply detection result to container info
+		info.Language = detectionResult.Language
+		info.Framework = detectionResult.Framework
+		info.Confidence = detectionResult.Confidence
+		info.Evidence = detectionResult.Evidence
 		depName, err := getPodDeploymentName(eld.Clientset, namespace, podName)
 		if err != nil {
 			eld.DomainLogger.DeploymentInfoFailed(namespace, podName, err)
@@ -502,8 +647,14 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 		eld.Cache.Set(container.Image, info.EnvVars, info)
 		eld.DomainLogger.CacheStored(container.Image, info.Language)
 
-		// Log detection result
-		eld.DomainLogger.LanguageDetected(namespace, podName, container.Name, container.Image, info.Language, info.Framework, info.Confidence)
+		// Log detection result with tier information
+		if tierLogger, ok := eld.DomainLogger.(interface {
+			LanguageDetectedWithTier(namespace, podName, containerName, image, language, framework, confidence, tier string)
+		}); ok {
+			tierLogger.LanguageDetectedWithTier(namespace, podName, container.Name, container.Image, info.Language, info.Framework, info.Confidence, detectionResult.Tier)
+		} else {
+			eld.DomainLogger.LanguageDetected(namespace, podName, container.Name, container.Image, info.Language, info.Framework, info.Confidence)
+		}
 
 		results = append(results, info)
 		_, ok := otelSupportedLanguages[info.Language]
@@ -636,13 +787,28 @@ func (eld *PolylangDetector) detectAdvancedLanguage(image string, envVars map[st
 		}
 	}
 
-	// --- FIX: Go binary scan is now a fallback check. ---
-	// Only perform this check if no other language could be confidently identified.
-	if len(candidates) == 0 {
+	// --- OPTIONAL: Go binary scan is now a fallback check (disabled by default) ---
+	// Only perform this check if:
+	// 1. No other language could be confidently identified
+	// 2. KM_ENABLE_IMAGE_INSPECTION environment variable is set to "true"
+	//
+	// Note: Image inspection requires pulling container images, which needs:
+	// - Public images: No credentials needed
+	// - Private registries (ECR/GCR/ACR): Requires cloud provider credentials
+	//
+	// To enable: Set KM_ENABLE_IMAGE_INSPECTION=true and configure registry credentials
+	enableImageInspection := os.Getenv("KM_ENABLE_IMAGE_INSPECTION") == "true"
+
+	if len(candidates) == 0 && enableImageInspection {
 		inspector := &ImageInspector{}
 		isGo, evidenceFromScan, err := inspector.isGoBinary(image)
 		if err != nil {
-			log.Printf("Warning: Failed to inspect image layers for Go signature: %v", err)
+			// Skip image inspection errors for private registries or inaccessible images
+			eld.Logger.Debug("Image layer inspection failed",
+				zap.String("image", image),
+				zap.String("reason", "image_pull_failed"),
+				zap.Error(err),
+			)
 		} else if isGo {
 			// If a Go binary is found, create a high-priority candidate for it.
 			candidates = append(candidates, struct {

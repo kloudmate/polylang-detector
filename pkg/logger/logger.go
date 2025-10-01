@@ -41,16 +41,40 @@ func (l *DomainLogger) LanguageDetectionStarted(namespace, podName, containerNam
 }
 
 func (l *DomainLogger) LanguageDetected(namespace, podName, containerName, image, language, framework, confidence string) {
-	l.Info("Language successfully detected",
+	fields := []zap.Field{
 		zap.String("event", "detection.completed"),
 		zap.String("namespace", namespace),
 		zap.String("pod", podName),
 		zap.String("container", containerName),
 		zap.String("image", image),
 		zap.String("language", language),
-		zap.String("framework", framework),
 		zap.String("confidence", confidence),
-	)
+	}
+
+	if framework != "" {
+		fields = append(fields, zap.String("framework", framework))
+	}
+
+	l.Info("Language successfully detected", fields...)
+}
+
+func (l *DomainLogger) LanguageDetectedWithTier(namespace, podName, containerName, image, language, framework, confidence, tier string) {
+	fields := []zap.Field{
+		zap.String("event", "detection.completed"),
+		zap.String("namespace", namespace),
+		zap.String("pod", podName),
+		zap.String("container", containerName),
+		zap.String("image", image),
+		zap.String("language", language),
+		zap.String("confidence", confidence),
+		zap.String("detection_tier", tier),
+	}
+
+	if framework != "" {
+		fields = append(fields, zap.String("framework", framework))
+	}
+
+	l.Info("Language successfully detected", fields...)
 }
 
 func (l *DomainLogger) LanguageDetectionFailed(namespace, podName, containerName string, err error) {
