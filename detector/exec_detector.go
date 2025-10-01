@@ -61,10 +61,24 @@ type PolylangDetector struct {
 	RpcClient         *rpc.Client
 	ServerAddr        string
 	Logger            *zap.Logger
+	DomainLogger      interface {
+		LanguageDetectionStarted(namespace, podName, containerName string)
+		LanguageDetected(namespace, podName, containerName, image, language, framework, confidence string)
+		LanguageDetectionFailed(namespace, podName, containerName string, err error)
+		UnsupportedLanguage(language string)
+		CacheHit(image, language string)
+		CacheMiss(image string)
+		CacheStored(image, language string)
+		RPCBatchSent(count int, response string)
+		RPCBatchFailed(count int, err error)
+		DeploymentInfoRetrieved(namespace, podName, deploymentName, kind string)
+		DeploymentInfoFailed(namespace, podName string, err error)
+	}
 	IgnoredNamespaces []string
 	Queue             chan ContainerInfo
 	QueueSize         int
 	BatchMutex        sync.Mutex
+	Cache             *LanguageCache
 }
 
 // ImageInspector provides methods for investigating container images.
@@ -407,6 +421,38 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 			}
 		}
 
+		// Check cache first
+		if cachedInfo, found := eld.Cache.Get(container.Image, info.EnvVars); found {
+			eld.DomainLogger.CacheHit(container.Image, cachedInfo.Language)
+			// Update pod-specific information
+			cachedInfo.PodName = podName
+			cachedInfo.Namespace = namespace
+			cachedInfo.ContainerName = container.Name
+			cachedInfo.DetectedAt = time.Now()
+
+			// Get deployment name
+			depName, err := getPodDeploymentName(eld.Clientset, namespace, podName)
+			if err != nil {
+				eld.DomainLogger.DeploymentInfoFailed(namespace, podName, err)
+			} else {
+				eld.DomainLogger.DeploymentInfoRetrieved(namespace, podName, depName, cachedInfo.Kind)
+			}
+			cachedInfo.DeploymentName = depName
+
+			results = append(results, *cachedInfo)
+
+			// Send to queue if supported
+			_, ok := otelSupportedLanguages[cachedInfo.Language]
+			if ok {
+				eld.Queue <- *cachedInfo
+			} else {
+				eld.DomainLogger.UnsupportedLanguage(cachedInfo.Language)
+			}
+			continue
+		}
+
+		eld.DomainLogger.CacheMiss(container.Image)
+
 		runtimeEnvVars, err := eld.getRuntimeEnvironmentVariables(namespace, podName, container.Name)
 		if err != nil {
 			// log.Printf("Warning: Could not get runtime env vars for %s/%s/%s: %v",
@@ -445,19 +491,27 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 		}
 		depName, err := getPodDeploymentName(eld.Clientset, namespace, podName)
 		if err != nil {
-			log.Printf("warning: could not get pod deplyment name for pod : %s ns:%s err: %v",
-				podName, namespace, err)
-
+			eld.DomainLogger.DeploymentInfoFailed(namespace, podName, err)
+		} else {
+			eld.DomainLogger.DeploymentInfoRetrieved(namespace, podName, depName, info.Kind)
 		}
 		// info.Enabled = IsResourceInstrumented(eld.Clientset, namespace, info.Kind, depName)
 		info.DeploymentName = depName
+
+		// Store in cache for future lookups
+		eld.Cache.Set(container.Image, info.EnvVars, info)
+		eld.DomainLogger.CacheStored(container.Image, info.Language)
+
+		// Log detection result
+		eld.DomainLogger.LanguageDetected(namespace, podName, container.Name, container.Image, info.Language, info.Framework, info.Confidence)
+
 		results = append(results, info)
 		_, ok := otelSupportedLanguages[info.Language]
 		if ok {
 			// Send the result to the queue for batching
 			eld.Queue <- info
 		} else {
-			log.Printf("we currently don't have auto instrumentaion support for : %s Language", info.Language)
+			eld.DomainLogger.UnsupportedLanguage(info.Language)
 		}
 
 	}
@@ -643,40 +697,69 @@ func (eld *PolylangDetector) extractVersion(envVars map[string]string, language 
 	return ""
 }
 
-func NewPolylangDetector(config *rest.Config, client *kubernetes.Clientset) *PolylangDetector {
+func NewPolylangDetector(config *rest.Config, client *kubernetes.Clientset, domainLogger interface {
+	LanguageDetectionStarted(namespace, podName, containerName string)
+	LanguageDetected(namespace, podName, containerName, image, language, framework, confidence string)
+	LanguageDetectionFailed(namespace, podName, containerName string, err error)
+	UnsupportedLanguage(language string)
+	CacheHit(image, language string)
+	CacheMiss(image string)
+	CacheStored(image, language string)
+	RPCBatchSent(count int, response string)
+	RPCBatchFailed(count int, err error)
+	DeploymentInfoRetrieved(namespace, podName, deploymentName, kind string)
+	DeploymentInfoFailed(namespace, podName string, err error)
+}) *PolylangDetector {
 	addr := string(os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
 	nsEnv := string(os.Getenv("KM_IGNORED_NS"))
 	ignoredNs := strings.Split(nsEnv, ",")
 	loggerConfig := zap.NewProductionConfig()
 	logger, _ := loggerConfig.Build()
+
+	// Cache TTL - default 1 hour, configurable via env var
+	cacheTTL := 1 * time.Hour
+	if ttlEnv := os.Getenv("KM_CACHE_TTL_MINUTES"); ttlEnv != "" {
+		if minutes, err := time.ParseDuration(ttlEnv + "m"); err == nil {
+			cacheTTL = minutes
+		}
+	}
+
 	return &PolylangDetector{
 		Clientset:         client,
 		Config:            config,
 		IgnoredNamespaces: ignoredNs,
 		ServerAddr:        addr,
 		Logger:            logger,
+		DomainLogger:      domainLogger,
 		Queue:             make(chan ContainerInfo, 100), // Queue with a capacity of 100
 		QueueSize:         5,                             // Batch size
+		Cache:             NewLanguageCache(cacheTTL),
 	}
 }
 
 func (pd *PolylangDetector) SendBatch(batch []ContainerInfo) {
+	if len(batch) == 0 {
+		return
+	}
+
 	var reply string
 	if pd.RpcClient != nil {
 		err := pd.RpcClient.Call("RPCHandler.PushDetectionResults", batch, &reply)
 		if err != nil {
-			log.Printf("Error sending batch via RPC: %v", err)
+			pd.DomainLogger.RPCBatchFailed(len(batch), err)
 			if err := pd.DialWithRetry(context.TODO(), time.Second*10); err != nil {
-				log.Fatalf("cannot establish connection with the config updater :%v", err)
+				pd.Logger.Error("Failed to re-establish RPC connection", zap.Error(err))
 			}
 			return
 		}
 	} else {
+		pd.Logger.Warn("RPC client not connected, attempting reconnection")
 		if err := pd.DialWithRetry(context.TODO(), time.Second*10); err != nil {
-			log.Fatalf("cannot establish connection with the config updater :%v", err)
+			pd.Logger.Error("Failed to establish RPC connection", zap.Error(err))
+			return
 		}
 	}
-	log.Printf("RPC call successful: %s", reply)
+	pd.DomainLogger.RPCBatchSent(len(batch), reply)
 }
 
 // getPodDeploymentName finds the name of the deployment that owns a given pod.

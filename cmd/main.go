@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/kloudmate/polylang-detector/detector"
+	"github.com/kloudmate/polylang-detector/pkg/logger"
 	"github.com/kloudmate/polylang-detector/rpc"
 	"github.com/kloudmate/polylang-detector/workload"
 )
@@ -20,32 +21,46 @@ var (
 )
 
 func main() {
-	log.Info("kloudmate polylang detector",
-		"version", version,
-		"commitSHA", commit,
-	)
+	// Initialize domain logger
+	domainLogger, err := logger.NewProductionLogger()
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer domainLogger.Sync()
+
+	domainLogger.ApplicationStarting(version, commit)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
+
 	k8sClient, k8sConfig, err := workload.GetClientSet()
 	if err != nil {
-		log.Errorf("Failed to create Kubernetes client: %v\n", err)
+		domainLogger.K8sClientInitFailed(err)
 		os.Exit(1)
 	}
+	domainLogger.K8sClientInitialized("in-cluster")
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	langDetector := detector.NewPolylangDetector(k8sConfig, k8sClient)
-	if err = langDetector.DialWithRetry(ctx, time.Second*10); err != nil {
-		log.Fatalf("cannot establish connection with the config updater :%v", err)
-	}
+
+	langDetector := detector.NewPolylangDetector(k8sConfig, k8sClient, domainLogger)
+
+	// Start RPC connection in background - don't block startup
+	go func() {
+		if err := langDetector.DialWithRetry(ctx, time.Second*10); err != nil {
+			domainLogger.Error("RPC connection permanently failed")
+		}
+	}()
 
 	go workload.AnalyzeWorkloads(ctx, langDetector, &wg)
 	go rpc.SendDataToUpdater(langDetector, k8sClient, k8sConfig, ctx, &wg)
 
+	domainLogger.ApplicationReady()
+
 	sig := <-sigChan
-	log.Printf("Received signal: %v. Initiating graceful shutdown...\n", sig)
+	domainLogger.ApplicationShuttingDown(sig.String())
 	cancel()
 	wg.Wait()
-	log.Printf("Graceful shutdown complete. Exiting main.")
+	domainLogger.ApplicationShutdownComplete()
 }
