@@ -535,7 +535,7 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 
 				// Analyze processes with enhanced pattern matching
 				lang, fw, conf, evidence := runtimeInspector.AnalyzeProcesses(processes)
-				if lang != "" {
+				if lang != "" && (detectionResult.Language == "" || conf == "high") {
 					detectionResult = DetectionResult{
 						Language:   lang,
 						Framework:  fw,
@@ -550,7 +550,8 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 			}
 
 			// Try filesystem signature detection if we still don't have high confidence
-			if detectionResult.Confidence != "high" {
+			// But don't override if we already have a medium/high confidence detection from earlier tiers
+			if detectionResult.Confidence != "high" && detectionResult.Language == "" {
 				lang, conf, evidence := runtimeInspector.DetectFileSystemSignatures(
 					namespace, podName, container.Name, eld.execCommandInPod)
 				if lang != "" {
@@ -564,7 +565,8 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 			}
 
 			// Try package manager detection
-			if detectionResult.Confidence != "high" {
+			// Don't override if we already have a detection from earlier tiers
+			if detectionResult.Confidence != "high" && detectionResult.Language == "" {
 				lang, conf, evidence := runtimeInspector.DetectPackageManagers(
 					namespace, podName, container.Name, eld.execCommandInPod)
 				if lang != "" {
@@ -578,7 +580,8 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 			}
 
 			// Try binary analysis
-			if detectionResult.Confidence != "high" {
+			// Don't override if we already have a detection from earlier tiers
+			if detectionResult.Confidence != "high" && detectionResult.Language == "" {
 				lang, conf, evidence := runtimeInspector.DetectBinarySignature(
 					namespace, podName, container.Name, eld.execCommandInPod)
 				if lang != "" {
@@ -592,7 +595,8 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 			}
 
 			// Try port-based detection as last resort
-			if detectionResult.Confidence != "high" {
+			// Don't override if we already have a detection from earlier tiers
+			if detectionResult.Confidence != "high" && detectionResult.Language == "" {
 				lang, fw, conf, evidence := runtimeInspector.DetectByPort(
 					namespace, podName, container.Name, eld.execCommandInPod)
 				if lang != "" {
@@ -909,22 +913,37 @@ func (pd *PolylangDetector) SendBatch(batch []ContainerInfo) {
 	}
 
 	var reply string
-	if pd.RpcClient != nil {
-		err := pd.RpcClient.Call("RPCHandler.PushDetectionResults", batch, &reply)
-		if err != nil {
-			pd.DomainLogger.RPCBatchFailed(len(batch), err)
-			if err := pd.DialWithRetry(context.TODO(), time.Second*10); err != nil {
-				pd.Logger.Error("Failed to re-establish RPC connection", zap.Error(err))
-			}
-			return
-		}
-	} else {
+
+	// Ensure we have a connection
+	if pd.RpcClient == nil {
 		pd.Logger.Warn("RPC client not connected, attempting reconnection")
 		if err := pd.DialWithRetry(context.TODO(), time.Second*10); err != nil {
 			pd.Logger.Error("Failed to establish RPC connection", zap.Error(err))
 			return
 		}
 	}
+
+	// Try to send the batch
+	err := pd.RpcClient.Call("RPCHandler.PushDetectionResults", batch, &reply)
+	if err != nil {
+		pd.DomainLogger.RPCBatchFailed(len(batch), err)
+
+		// Connection failed, try to reconnect
+		pd.RpcClient = nil // Mark connection as dead
+		if err := pd.DialWithRetry(context.TODO(), time.Second*10); err != nil {
+			pd.Logger.Error("Failed to re-establish RPC connection", zap.Error(err))
+			return
+		}
+
+		// Retry sending the batch after reconnection
+		err = pd.RpcClient.Call("RPCHandler.PushDetectionResults", batch, &reply)
+		if err != nil {
+			pd.DomainLogger.RPCBatchFailed(len(batch), err)
+			pd.Logger.Error("Failed to send batch after reconnection", zap.Error(err))
+			return
+		}
+	}
+
 	pd.DomainLogger.RPCBatchSent(len(batch), reply)
 }
 

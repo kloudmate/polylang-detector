@@ -416,17 +416,25 @@ func (ri *RuntimeInspector) AnalyzeProcesses(processes []string) (string, string
 func (ri *RuntimeInspector) DetectFileSystemSignatures(namespace, podName, containerName string, execFunc func(string, string, string, []string) (string, error)) (string, string, []string) {
 	var evidence []string
 
-	for _, sig := range fileSystemSignatures {
-		// Try to find files in common locations
-		searchPaths := []string{
-			"/app",
-			"/usr/src/app",
-			"/opt/app",
-			"/home/app",
-			"/",
-			"/workspace",
-		}
+	// Track all matches with their scores
+	type match struct {
+		language   string
+		confidence string
+		priority   int
+		fileCount  int
+	}
+	matches := make(map[string]*match)
 
+	searchPaths := []string{
+		"/app",
+		"/usr/src/app",
+		"/opt/app",
+		"/home/app",
+		"/",
+		"/workspace",
+	}
+
+	for _, sig := range fileSystemSignatures {
 		for _, path := range searchPaths {
 			for _, file := range sig.Files {
 				// Try to check if file exists
@@ -434,10 +442,41 @@ func (ri *RuntimeInspector) DetectFileSystemSignatures(namespace, podName, conta
 				output, err := execFunc(namespace, podName, containerName, cmd)
 				if err == nil && strings.Contains(output, "found") {
 					evidence = append(evidence, fmt.Sprintf("Found %s in %s", file, path))
-					return sig.Language, sig.Confidence, evidence
+
+					// Track this match
+					if m, exists := matches[sig.Language]; exists {
+						m.fileCount++
+					} else {
+						matches[sig.Language] = &match{
+							language:   sig.Language,
+							confidence: sig.Confidence,
+							priority:   sig.Priority,
+							fileCount:  1,
+						}
+					}
 				}
 			}
 		}
+	}
+
+	// Return the language with most file matches, or highest priority if tied
+	var bestMatch *match
+	for _, m := range matches {
+		if bestMatch == nil {
+			bestMatch = m
+			continue
+		}
+
+		// Prefer language with more matching files
+		if m.fileCount > bestMatch.fileCount {
+			bestMatch = m
+		} else if m.fileCount == bestMatch.fileCount && m.priority > bestMatch.priority {
+			bestMatch = m
+		}
+	}
+
+	if bestMatch != nil {
+		return bestMatch.language, bestMatch.confidence, evidence
 	}
 
 	return "", "", evidence
