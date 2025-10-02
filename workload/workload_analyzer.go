@@ -65,6 +65,26 @@ func AnalyzeWorkloads(ctx context.Context, pd *detector.PolylangDetector, wg *sy
 		InformerCacheSynced()
 	}).InformerCacheSynced()
 
+	// Periodic re-sync: Clear processedPods cache every 5 minutes to allow re-detection and re-sending
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Clear the processed pods map to allow re-detection
+				processedPods.Range(func(key, value interface{}) bool {
+					processedPods.Delete(key)
+					return true
+				})
+				pd.Logger.Sugar().Info("Cleared processed pods cache for re-sync")
+			}
+		}
+	}()
+
 	// Keep the function running until context is cancelled
 	<-ctx.Done()
 }
