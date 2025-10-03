@@ -15,7 +15,7 @@ func SendDataToUpdater(pd *detector.PolylangDetector, clientset *kubernetes.Clie
 	wg.Add(1)
 	defer wg.Done()
 	var batch []detector.ContainerInfo
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {

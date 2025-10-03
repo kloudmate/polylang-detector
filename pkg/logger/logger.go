@@ -173,50 +173,31 @@ func (l *DomainLogger) RPCBatchFailed(count int, err error) {
 	)
 }
 
-// Informer Domain Events
-func (l *DomainLogger) InformerStarted() {
-	l.Info("Kubernetes pod informer started",
-		zap.String("event", "informer.started"),
+// eBPF Scanning Domain Events
+func (l *DomainLogger) EbpfScanStarted() {
+	l.Info("eBPF-based pod scanning started",
+		zap.String("event", "ebpf.scan.started"),
 	)
 }
 
-func (l *DomainLogger) InformerCacheSynced() {
-	l.Info("Informer cache synchronized with cluster state",
-		zap.String("event", "informer.cache.synced"),
+func (l *DomainLogger) EbpfScanStopped() {
+	l.Info("eBPF-based pod scanning stopped",
+		zap.String("event", "ebpf.scan.stopped"),
 	)
 }
 
-func (l *DomainLogger) InformerCacheSyncFailed(err error) {
-	l.Error("Failed to synchronize informer cache",
-		zap.String("event", "informer.cache.sync_failed"),
-		zap.Error(err),
+func (l *DomainLogger) EbpfScanCycleStarted(count int) {
+	l.Info("Starting eBPF scan cycle",
+		zap.String("event", "ebpf.scan.cycle_started"),
+		zap.Int("total_pods", count),
 	)
 }
 
-func (l *DomainLogger) PodEventReceived(eventType, namespace, podName string) {
-	l.Debug("Pod lifecycle event received",
-		zap.String("event", "informer.pod.event"),
-		zap.String("event_type", eventType),
-		zap.String("namespace", namespace),
-		zap.String("pod", podName),
-	)
-}
-
-func (l *DomainLogger) PodEventProcessing(eventType, namespace, podName string) {
-	l.Info("Processing pod event",
-		zap.String("event", "informer.pod.processing"),
-		zap.String("event_type", eventType),
-		zap.String("namespace", namespace),
-		zap.String("pod", podName),
-	)
-}
-
-func (l *DomainLogger) PodEventSkipped(namespace, podName, reason string) {
-	l.Debug("Pod event skipped",
-		zap.String("event", "informer.pod.skipped"),
-		zap.String("namespace", namespace),
-		zap.String("pod", podName),
-		zap.String("reason", reason),
+func (l *DomainLogger) EbpfScanCycleCompleted(scanned, detected int) {
+	l.Info("eBPF scan cycle completed",
+		zap.String("event", "ebpf.scan.cycle_completed"),
+		zap.Int("pods_scanned", scanned),
+		zap.Int("pods_detected", detected),
 	)
 }
 
