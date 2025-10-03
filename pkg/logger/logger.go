@@ -281,3 +281,40 @@ func (l *DomainLogger) DeploymentInfoFailed(namespace, podName string, err error
 		zap.Error(err),
 	)
 }
+
+// eBPF Detection Domain Events
+func (l *DomainLogger) EbpfDetectionStarted(namespace, podName string) {
+	l.Info("eBPF-based language detection initiated",
+		zap.String("event", "ebpf.detection.started"),
+		zap.String("namespace", namespace),
+		zap.String("pod", podName),
+	)
+}
+
+func (l *DomainLogger) EbpfDetectionSucceeded(namespace, podName, language, method string) {
+	l.Info("eBPF detection succeeded",
+		zap.String("event", "ebpf.detection.succeeded"),
+		zap.String("namespace", namespace),
+		zap.String("pod", podName),
+		zap.String("language", language),
+		zap.String("detection_method", method),
+	)
+}
+
+func (l *DomainLogger) EbpfDetectionFailed(namespace, podName string, err error) {
+	l.Warn("eBPF detection failed, falling back to exec-based detection",
+		zap.String("event", "ebpf.detection.failed"),
+		zap.String("namespace", namespace),
+		zap.String("pod", podName),
+		zap.Error(err),
+	)
+}
+
+func (l *DomainLogger) EbpfProcessInspected(pid int, language, executable string) {
+	l.Debug("Process inspected via eBPF",
+		zap.String("event", "ebpf.process.inspected"),
+		zap.Int("pid", pid),
+		zap.String("language", language),
+		zap.String("executable", executable),
+	)
+}

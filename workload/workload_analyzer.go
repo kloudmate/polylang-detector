@@ -126,13 +126,14 @@ func handlePodEvent(ctx context.Context, pd *detector.PolylangDetector, pod *cor
 
 	// Process pod asynchronously to avoid blocking the informer
 	go func(podName, namespace string) {
-		containerInfos, err := pd.DetectLanguageWithRuntimeInfo(namespace, podName)
+		// Try eBPF detection first for better performance
+		containerInfos, err := pd.DetectLanguageWithEbpf(namespace, podName)
 		if err != nil {
 			pd.DomainLogger.LanguageDetectionFailed(namespace, podName, "", err)
 			return
 		}
 
-		// Individual container logs are now handled in DetectLanguageWithRuntimeInfo
+		// Individual container logs are now handled in detection methods
 		_ = containerInfos
 	}(pod.Name, pod.Namespace)
 }
