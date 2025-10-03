@@ -65,12 +65,12 @@ type DetectionResult struct {
 
 // PolylangDetector contains the Kubernetes client to interact with the cluster.
 type PolylangDetector struct {
-	Clientset         *kubernetes.Clientset
-	Config            *rest.Config
-	RpcClient         *rpc.Client
-	ServerAddr        string
-	Logger            *zap.Logger
-	DomainLogger      interface {
+	Clientset    *kubernetes.Clientset
+	Config       *rest.Config
+	RpcClient    *rpc.Client
+	ServerAddr   string
+	Logger       *zap.Logger
+	DomainLogger interface {
 		LanguageDetectionStarted(namespace, podName, containerName string)
 		LanguageDetected(namespace, podName, containerName, image, language, framework, confidence string)
 		LanguageDetectionFailed(namespace, podName, containerName string, err error)

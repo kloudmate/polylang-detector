@@ -53,6 +53,9 @@ func main() {
 		}
 	}()
 
+	// Perform initial scan of existing pods for better accuracy
+	go workload.ScanPods(ctx, k8sClient, langDetector)
+
 	go workload.AnalyzeWorkloads(ctx, langDetector, &wg)
 	go rpc.SendDataToUpdater(langDetector, k8sClient, k8sConfig, ctx, &wg)
 
