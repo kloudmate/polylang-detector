@@ -46,14 +46,13 @@ func main() {
 
 	langDetector := detector.NewPolylangDetector(k8sConfig, k8sClient, domainLogger)
 
-	// Start RPC connection in background - don't block startup
 	go func() {
 		if err := langDetector.DialWithRetry(ctx, time.Second*10); err != nil {
 			domainLogger.Error("RPC connection permanently failed")
 		}
 	}()
 
-	go workload.AnalyzeWorkloads(ctx, langDetector, &wg)
+	go workload.ScanPodsEbpf(ctx, k8sClient, langDetector, &wg)
 	go rpc.SendDataToUpdater(langDetector, k8sClient, k8sConfig, ctx, &wg)
 
 	domainLogger.ApplicationReady()

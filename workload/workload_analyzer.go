@@ -2,148 +2,111 @@ package workload
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/log"
 	"github.com/kloudmate/polylang-detector/detector"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
 )
 
-func AnalyzeWorkloads(ctx context.Context, pd *detector.PolylangDetector, wg *sync.WaitGroup) {
+// ScanPodsEbpf continuously scans all running pods using eBPF-based detection
+func ScanPodsEbpf(ctx context.Context, clientset *kubernetes.Clientset, pd *detector.PolylangDetector, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 
 	pd.DomainLogger.(interface {
-		InformerStarted()
-	}).InformerStarted()
-
-	// Create informer factory with 10-minute resync period
-	factory := informers.NewSharedInformerFactory(pd.Clientset, 10*time.Minute)
-	podInformer := factory.Core().V1().Pods().Informer()
+		EbpfScanStarted()
+	}).EbpfScanStarted()
 
 	// Track processed pods to avoid duplicate processing
 	processedPods := sync.Map{}
 
-	// Add event handlers for pod lifecycle
-	podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			pod := obj.(*corev1.Pod)
-			handlePodEvent(ctx, pd, pod, &processedPods, "ADD")
-		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			pod := newObj.(*corev1.Pod)
-			handlePodEvent(ctx, pd, pod, &processedPods, "UPDATE")
-		},
-		DeleteFunc: func(obj interface{}) {
-			pod := obj.(*corev1.Pod)
-			// Clean up from processed cache
-			key := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
-			processedPods.Delete(key)
-			pd.Logger.Sugar().Debugf("Removed pod from cache: %s", key)
-		},
-	})
+	// Periodic scanning with configurable interval
+	scanInterval := 30 * time.Second
+	ticker := time.NewTicker(scanInterval)
+	defer ticker.Stop()
 
-	// Start the informer
-	go factory.Start(ctx.Done())
+	// Perform initial scan immediately
+	scanAllPods(ctx, clientset, pd, &processedPods)
 
-	// Wait for cache sync before processing
-	if !cache.WaitForCacheSync(ctx.Done(), podInformer.HasSynced) {
-		pd.DomainLogger.(interface {
-			InformerCacheSyncFailed(err error)
-		}).InformerCacheSyncFailed(fmt.Errorf("cache sync failed"))
-		return
-	}
+	// Periodic re-sync: Clear processedPods cache every 5 minutes to allow re-detection
+	resyncTicker := time.NewTicker(6 * time.Minute)
+	defer resyncTicker.Stop()
 
-	pd.DomainLogger.(interface {
-		InformerCacheSynced()
-	}).InformerCacheSynced()
-
-	// Keep the function running until context is cancelled
-	<-ctx.Done()
-}
-
-// handlePodEvent processes pod events from the informer
-func handlePodEvent(ctx context.Context, pd *detector.PolylangDetector, pod *corev1.Pod, processedPods *sync.Map, eventType string) {
-	// Skip ignored namespaces
-	if slices.Contains(pd.IgnoredNamespaces, pod.Namespace) {
-		pd.DomainLogger.(interface {
-			PodEventSkipped(namespace, podName, reason string)
-		}).PodEventSkipped(pod.Namespace, pod.Name, "namespace_ignored")
-		return
-	}
-
-	// Only process running pods
-	if pod.Status.Phase != corev1.PodRunning {
-		pd.DomainLogger.(interface {
-			PodEventSkipped(namespace, podName, reason string)
-		}).PodEventSkipped(pod.Namespace, pod.Name, fmt.Sprintf("pod_not_running:phase=%s", pod.Status.Phase))
-		return
-	}
-
-	// Create unique key for this pod
-	key := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
-
-	// For UPDATE events, skip if already processed
-	if eventType == "UPDATE" {
-		if _, exists := processedPods.Load(key); exists {
+	for {
+		select {
+		case <-ctx.Done():
+			pd.DomainLogger.(interface {
+				EbpfScanStopped()
+			}).EbpfScanStopped()
 			return
+		case <-ticker.C:
+			// Scan pods periodically
+			scanAllPods(ctx, clientset, pd, &processedPods)
+		case <-resyncTicker.C:
+			// Clear the processed pods map to allow re-detection
+			processedPods.Range(func(key, value interface{}) bool {
+				processedPods.Delete(key)
+				return true
+			})
+			pd.Logger.Sugar().Info("Cleared processed pods cache for re-sync")
 		}
 	}
-
-	// Mark as processed
-	processedPods.Store(key, true)
-
-	pd.DomainLogger.(interface {
-		PodEventProcessing(eventType, namespace, podName string)
-	}).PodEventProcessing(eventType, pod.Namespace, pod.Name)
-
-	// Process pod asynchronously to avoid blocking the informer
-	go func(podName, namespace string) {
-		containerInfos, err := pd.DetectLanguageWithRuntimeInfo(namespace, podName)
-		if err != nil {
-			pd.DomainLogger.LanguageDetectionFailed(namespace, podName, "", err)
-			return
-		}
-
-		// Individual container logs are now handled in DetectLanguageWithRuntimeInfo
-		_ = containerInfos
-	}(pod.Name, pod.Namespace)
 }
 
-// ScanPods fetches all running pods and attempts to detect their language using exec.
-// This is kept for backward compatibility and initial scanning on startup.
-func ScanPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detector.PolylangDetector) {
+// scanAllPods scans all running pods in the cluster
+func scanAllPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detector.PolylangDetector, processedPods *sync.Map) {
 	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
 	if err != nil {
-		fmt.Printf("Error fetching pods: %v\n", err)
+		pd.Logger.Sugar().Errorf("Error fetching pods: %v", err)
 		return
 	}
 
+	pd.DomainLogger.(interface {
+		EbpfScanCycleStarted(count int)
+	}).EbpfScanCycleStarted(len(pods.Items))
+
+	var detectedCount int
 	for _, pod := range pods.Items {
+		// Skip ignored namespaces
 		if slices.Contains(pd.IgnoredNamespaces, pod.Namespace) {
 			continue
 		}
-		// Only scan running pods
-		if pod.Status.Phase == corev1.PodRunning {
-			log.Printf("Starting language detection for pod %s in namespace %s", pod.Name, pod.Namespace)
 
-			containerInfos, err := pd.DetectLanguageWithRuntimeInfo(pod.Namespace, pod.Name)
+		// Only scan running pods
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+
+		// Create unique key for this pod
+		key := pod.Namespace + "/" + pod.Name
+
+		// Skip if already processed
+		if _, exists := processedPods.Load(key); exists {
+			continue
+		}
+
+		// Mark as processed
+		processedPods.Store(key, true)
+
+		// Detect language using eBPF
+		go func(p corev1.Pod) {
+			containerInfos, err := pd.DetectLanguageWithEbpf(p.Namespace, p.Name)
 			if err != nil {
-				log.Errorf("Error detecting language for pod %s/%s: %v", pod.Namespace, pod.Name, err)
-				continue
+				pd.DomainLogger.LanguageDetectionFailed(p.Namespace, p.Name, "", err)
+				return
 			}
+
 			for _, info := range containerInfos {
-				pd.Logger.Sugar().Infow("workload analyzer",
+				pd.Logger.Sugar().Infow("eBPF detection completed",
 					"container_name", info.ContainerName,
 					"image", info.Image,
 					"language", info.Language,
+					"framework", info.Framework,
+					"confidence", info.Confidence,
 					"namespace", info.Namespace,
 					"deployment_name", info.DeploymentName,
 					"deployment_kind", info.Kind,
@@ -151,6 +114,12 @@ func ScanPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detector
 					"detected_at", info.DetectedAt,
 				)
 			}
-		}
+		}(pod)
+
+		detectedCount++
 	}
+
+	pd.DomainLogger.(interface {
+		EbpfScanCycleCompleted(scanned, detected int)
+	}).EbpfScanCycleCompleted(len(pods.Items), detectedCount)
 }
