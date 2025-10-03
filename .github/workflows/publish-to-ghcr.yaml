@@ -32,7 +32,7 @@ jobs:
         with:
           registry: ghcr.io
           username: kloudmate
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
 
       # extract metadata (tags, labels) for the Docker image
       # this automatically generates tags and labels from the Git context and GitHub events.
@@ -107,7 +107,7 @@ jobs:
         with:
           registry: ghcr.io
           username: kloudmate
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
