@@ -87,31 +87,6 @@ func (lc *LanguageCache) Set(image string, envVars map[string]string, info Conta
 	}
 }
 
-// Delete removes a cache entry
-func (lc *LanguageCache) Delete(image string, envVars map[string]string) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	key := lc.generateKey(image, envVars)
-	delete(lc.cache, key)
-}
-
-// Clear removes all cache entries
-func (lc *LanguageCache) Clear() {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	lc.cache = make(map[string]*CacheEntry)
-}
-
-// Size returns the number of entries in the cache
-func (lc *LanguageCache) Size() int {
-	lc.mu.RLock()
-	defer lc.mu.RUnlock()
-
-	return len(lc.cache)
-}
-
 // cleanup periodically removes expired entries
 func (lc *LanguageCache) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
