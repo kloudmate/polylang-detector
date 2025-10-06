@@ -1,7 +1,6 @@
 package detector
 
 import (
-	"regexp"
 	"strings"
 )
 
@@ -197,81 +196,3 @@ func (ia *ImageAnalyzer) AnalyzeImageName(image string) (string, string, string,
 	return "", "", "", evidence
 }
 
-// ExtractVersionFromImage attempts to extract version from image tag
-func (ia *ImageAnalyzer) ExtractVersionFromImage(image string) string {
-	// Pattern to match common version formats in image tags
-	patterns := []string{
-		`:([\d]+\.[\d]+\.[\d]+)`,      // :1.2.3
-		`:([\d]+\.[\d]+)`,              // :1.2
-		`-v([\d]+\.[\d]+\.[\d]+)`,      // -v1.2.3
-		`-([\d]+\.[\d]+\.[\d]+)-`,      // -1.2.3-
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(image)
-		if len(matches) > 1 {
-			return matches[1]
-		}
-	}
-
-	return ""
-}
-
-// IsApplicationImage determines if an image is likely an application vs infrastructure
-func (ia *ImageAnalyzer) IsApplicationImage(image string) bool {
-	imageLower := strings.ToLower(image)
-
-	// Infrastructure/system images (not applications)
-	infraPatterns := []string{
-		"nginx", "apache", "httpd",
-		"envoy", "haproxy", "traefik",
-		"prometheus", "grafana",
-		"fluentd", "fluent-bit",
-		"istio", "linkerd",
-		"busybox", "alpine",
-	}
-
-	for _, pattern := range infraPatterns {
-		if strings.Contains(imageLower, pattern) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// DetectPrivateRegistry identifies if image is from a private registry
-func (ia *ImageAnalyzer) DetectPrivateRegistry(image string) (bool, string) {
-	imageLower := strings.ToLower(image)
-
-	registries := map[string]string{
-		"ecr":               "AWS ECR",
-		".amazonaws.com":    "AWS ECR",
-		"gcr.io":            "Google GCR",
-		"azurecr.io":        "Azure ACR",
-		"registry.gitlab":   "GitLab Registry",
-		"ghcr.io":           "GitHub Registry",
-		"quay.io":           "Quay.io",
-		"docker.pkg.github": "GitHub Packages",
-	}
-
-	for pattern, name := range registries {
-		if strings.Contains(imageLower, pattern) {
-			return true, name
-		}
-	}
-
-	// Check if it's not from Docker Hub (no domain = Docker Hub)
-	if !strings.Contains(image, "/") || strings.Count(image, "/") == 1 {
-		return false, "Docker Hub"
-	}
-
-	// Has a domain but not recognized = likely private
-	parts := strings.Split(image, "/")
-	if len(parts) > 0 && strings.Contains(parts[0], ".") {
-		return true, "Private Registry"
-	}
-
-	return false, "Docker Hub"
-}

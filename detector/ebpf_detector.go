@@ -58,7 +58,7 @@ var languageSignatures = []LanguageSignature{
 		Framework:  "Spring Boot",
 		Patterns:   []string{"spring-boot", "org.springframework.boot"},
 		Libraries:  []string{"libjvm.so", "libjava.so"},
-		Priority:   20,
+		Priority:   25,
 		Confidence: "high",
 	},
 	{
@@ -66,31 +66,39 @@ var languageSignatures = []LanguageSignature{
 		Framework:  "",
 		Patterns:   []string{"java", "openjdk", "jre", "jdk"},
 		Libraries:  []string{"libjvm.so", "libjava.so"},
-		Priority:   15,
+		Priority:   18,
 		Confidence: "high",
 	},
 	// Node.js
 	{
 		Language:   "nodejs",
 		Framework:  "Next.js",
-		Patterns:   []string{"next start", "next dev", ".next/server"},
-		Libraries:  []string{"libnode.so"},
+		Patterns:   []string{"next start", "next dev", ".next/server", "next-server"},
+		Libraries:  []string{"libnode.so", "libnode.so.", "node"},
 		Priority:   20,
 		Confidence: "high",
 	},
 	{
 		Language:   "nodejs",
 		Framework:  "NestJS",
-		Patterns:   []string{"@nestjs/core", "nest start"},
-		Libraries:  []string{"libnode.so"},
+		Patterns:   []string{"@nestjs/core", "nest start", "nestjs"},
+		Libraries:  []string{"libnode.so", "libnode.so.", "node"},
+		Priority:   20,
+		Confidence: "high",
+	},
+	{
+		Language:   "nodejs",
+		Framework:  "Express",
+		Patterns:   []string{"express", "express.js", "expressjs"},
+		Libraries:  []string{"libnode.so", "libnode.so.", "node"},
 		Priority:   20,
 		Confidence: "high",
 	},
 	{
 		Language:   "nodejs",
 		Framework:  "",
-		Patterns:   []string{"node", "/usr/bin/node", "/usr/local/bin/node"},
-		Libraries:  []string{"libnode.so"},
+		Patterns:   []string{"/node ", "\\node.exe", "/usr/bin/node", "/usr/local/bin/node", "node_modules", "npm start", "yarn start", "pnpm start"},
+		Libraries:  []string{"libnode.so", "libnode.so.", "node"},
 		Priority:   15,
 		Confidence: "high",
 	},
@@ -98,40 +106,48 @@ var languageSignatures = []LanguageSignature{
 	{
 		Language:   "Python",
 		Framework:  "Django",
-		Patterns:   []string{"django", "manage.py", "django.core"},
-		Libraries:  []string{"libpython", "python3"},
+		Patterns:   []string{"django", "manage.py", "django.core", "django-admin", "wsgi.py"},
+		Libraries:  []string{"libpython3", "libpython2", "python3.", "python2."},
 		Priority:   20,
 		Confidence: "high",
 	},
 	{
 		Language:   "Python",
 		Framework:  "FastAPI",
-		Patterns:   []string{"fastapi", "uvicorn", "starlette"},
-		Libraries:  []string{"libpython", "python3"},
+		Patterns:   []string{"fastapi", "uvicorn", "starlette", "asgi"},
+		Libraries:  []string{"libpython3", "libpython2", "python3.", "python2."},
 		Priority:   20,
 		Confidence: "high",
 	},
 	{
 		Language:   "Python",
 		Framework:  "Flask",
-		Patterns:   []string{"flask", "werkzeug"},
-		Libraries:  []string{"libpython", "python3"},
+		Patterns:   []string{"flask", "werkzeug", "flask run"},
+		Libraries:  []string{"libpython3", "libpython2", "python3.", "python2."},
+		Priority:   20,
+		Confidence: "high",
+	},
+	{
+		Language:   "Python",
+		Framework:  "Gunicorn",
+		Patterns:   []string{"gunicorn", "gunicorn.app"},
+		Libraries:  []string{"libpython3", "libpython2", "python3.", "python2."},
 		Priority:   20,
 		Confidence: "high",
 	},
 	{
 		Language:   "Python",
 		Framework:  "",
-		Patterns:   []string{"python", "python3", "/usr/bin/python"},
-		Libraries:  []string{"libpython", "python3"},
+		Patterns:   []string{"/python", "python3", "python2", "/usr/bin/python", "/usr/local/bin/python", "pip ", "poetry run", "pipenv run"},
+		Libraries:  []string{"libpython3", "libpython2", "python3.", "python2."},
 		Priority:   15,
 		Confidence: "high",
 	},
-	// .NET
+	// .NET - More specific patterns to avoid false positives
 	{
 		Language:   ".NET",
 		Framework:  "ASP.NET Core",
-		Patterns:   []string{"dotnet", "aspnetcore", "Microsoft.AspNetCore"},
+		Patterns:   []string{"aspnetcore", "Microsoft.AspNetCore"},
 		Libraries:  []string{"libcoreclr.so", "System.Private.CoreLib.dll"},
 		Priority:   20,
 		Confidence: "high",
@@ -139,7 +155,7 @@ var languageSignatures = []LanguageSignature{
 	{
 		Language:   ".NET",
 		Framework:  "",
-		Patterns:   []string{"dotnet", "/usr/bin/dotnet"},
+		Patterns:   []string{"/dotnet ", "\\dotnet.exe", "/usr/bin/dotnet", "/usr/share/dotnet"},
 		Libraries:  []string{"libcoreclr.so"},
 		Priority:   15,
 		Confidence: "high",
@@ -299,36 +315,59 @@ func (ed *EbpfDetector) matchLanguageSignatures(procInfo *ProcessInfo) (string, 
 	exeLower := strings.ToLower(procInfo.Executable)
 	combined := cmdlineLower + " " + exeLower
 
+	// Read memory maps once for library checking
+	var mapsContent string
+	if procInfo.PID > 0 {
+		mapsPath := fmt.Sprintf("/proc/%d/maps", procInfo.PID)
+		if mapsData, err := os.ReadFile(mapsPath); err == nil {
+			mapsContent = strings.ToLower(string(mapsData))
+		}
+	}
+
 	var bestMatch *LanguageSignature
+	var bestMatchHasLib bool
+
 	for i := range languageSignatures {
 		sig := &languageSignatures[i]
-		matched := false
+		patternMatched := false
+		libraryMatched := false
 
 		// Check command line patterns
 		for _, pattern := range sig.Patterns {
 			if strings.Contains(combined, strings.ToLower(pattern)) {
-				matched = true
+				patternMatched = true
 				break
 			}
 		}
 
-		// Check library dependencies if available
-		if !matched && procInfo.PID > 0 {
-			mapsPath := fmt.Sprintf("/proc/%d/maps", procInfo.PID)
-			if mapsData, err := os.ReadFile(mapsPath); err == nil {
-				mapsContent := strings.ToLower(string(mapsData))
-				for _, lib := range sig.Libraries {
-					if strings.Contains(mapsContent, strings.ToLower(lib)) {
-						matched = true
-						break
-					}
+		// Check library dependencies
+		if mapsContent != "" && len(sig.Libraries) > 0 {
+			for _, lib := range sig.Libraries {
+				if strings.Contains(mapsContent, strings.ToLower(lib)) {
+					libraryMatched = true
+					break
 				}
 			}
 		}
 
+		// Match if either pattern or library matches
+		matched := patternMatched || libraryMatched
+
 		if matched {
-			if bestMatch == nil || sig.Priority > bestMatch.Priority {
+			// Prefer matches with library evidence, especially for similar languages
+			if bestMatch == nil {
 				bestMatch = sig
+				bestMatchHasLib = libraryMatched
+			} else {
+				// If new match has library evidence but current doesn't, prefer it
+				if libraryMatched && !bestMatchHasLib && sig.Priority >= bestMatch.Priority {
+					bestMatch = sig
+					bestMatchHasLib = libraryMatched
+				} else if sig.Priority > bestMatch.Priority {
+					// Otherwise use priority
+					bestMatch = sig
+					bestMatchHasLib = libraryMatched
+				}
 			}
 		}
 	}

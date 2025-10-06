@@ -385,7 +385,3 @@ func (pd *PolylangDetector) DetectLanguageWithEbpf(namespace, podName string) ([
 	return pd.DetectLanguageWithRuntimeInfo(namespace, podName)
 }
 
-// ClearCache clears the eBPF detector cache
-func (ekd *EbpfK8sDetector) ClearCache() {
-	ekd.ebpfDetector.ClearCache()
-}

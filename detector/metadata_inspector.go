@@ -1,11 +1,9 @@
 package detector
 
 import (
-	"context"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -62,71 +60,6 @@ func (mi *MetadataInspector) InspectPodAnnotations(pod *corev1.Pod) (string, str
 	}
 
 	return "", "", "", evidence
-}
-
-// InspectPodLabels checks pod labels for language hints
-func (mi *MetadataInspector) InspectPodLabels(pod *corev1.Pod) (string, string, []string) {
-	var evidence []string
-
-	labels := pod.Labels
-	if labels == nil {
-		return "", "", evidence
-	}
-
-	labelKeys := []string{
-		"app.kubernetes.io/language",
-		"language",
-		"runtime",
-		"framework",
-	}
-
-	for _, key := range labelKeys {
-		if val, exists := labels[key]; exists && val != "" {
-			evidence = append(evidence, "Label: "+key+"="+val)
-			return mi.normalizeLanguage(val), "medium", evidence
-		}
-	}
-
-	return "", "", evidence
-}
-
-// InspectConfigMaps checks if pod has mounted ConfigMaps with language-specific configs
-func (mi *MetadataInspector) InspectConfigMaps(namespace string, pod *corev1.Pod) (string, string, []string) {
-	var evidence []string
-
-	for _, volume := range pod.Spec.Volumes {
-		if volume.ConfigMap != nil {
-			configMap, err := mi.clientset.CoreV1().ConfigMaps(namespace).Get(
-				context.TODO(),
-				volume.ConfigMap.Name,
-				metav1.GetOptions{},
-			)
-			if err != nil {
-				continue
-			}
-
-			// Check ConfigMap data for language-specific files
-			for key := range configMap.Data {
-				keyLower := strings.ToLower(key)
-
-				if strings.Contains(keyLower, "application.properties") || strings.Contains(keyLower, "application.yml") {
-					evidence = append(evidence, "ConfigMap contains: "+key)
-					return "Java", "Spring Boot", evidence
-				} else if strings.Contains(keyLower, "appsettings.json") {
-					evidence = append(evidence, "ConfigMap contains: "+key)
-					return ".NET", "ASP.NET Core", evidence
-				} else if strings.Contains(keyLower, "config.js") || strings.Contains(keyLower, "package.json") {
-					evidence = append(evidence, "ConfigMap contains: "+key)
-					return "nodejs", "", evidence
-				} else if strings.Contains(keyLower, "settings.py") || strings.Contains(keyLower, "django") {
-					evidence = append(evidence, "ConfigMap contains: "+key)
-					return "Python", "Django", evidence
-				}
-			}
-		}
-	}
-
-	return "", "", evidence
 }
 
 // extractFramework attempts to extract framework name from annotation value
