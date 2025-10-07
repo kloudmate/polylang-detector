@@ -374,7 +374,7 @@ func (pd *PolylangDetector) DetectLanguageWithEbpf(namespace, podName string) ([
 			info := &results[i]
 			pd.Cache.Set(info.Image, info.EnvVars, *info)
 
-			if _, ok := otelSupportedLanguages[info.Language]; ok {
+			if _, ok := OtelSupportedLanguages[info.Language]; ok {
 				pd.Queue <- *info
 			}
 		}

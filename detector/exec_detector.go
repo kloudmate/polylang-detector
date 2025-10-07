@@ -456,7 +456,7 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 			results = append(results, *cachedInfo)
 
 			// Send to queue if supported
-			_, ok := otelSupportedLanguages[cachedInfo.Language]
+			_, ok := OtelSupportedLanguages[cachedInfo.Language]
 			if ok {
 				eld.Queue <- *cachedInfo
 			} else {
@@ -661,7 +661,7 @@ func (eld *PolylangDetector) DetectLanguageWithRuntimeInfo(namespace, podName st
 		}
 
 		results = append(results, info)
-		_, ok := otelSupportedLanguages[info.Language]
+		_, ok := OtelSupportedLanguages[info.Language]
 		if ok {
 			// Send the result to the queue for batching
 			eld.Queue <- info
@@ -993,4 +993,10 @@ func isOtelInstrumented(annotations map[string]string, ns, crd string) bool {
 		}
 	}
 	return false
+}
+
+// DetectLanguageWithProcInspection detects language using /proc filesystem inspection (DaemonSet mode)
+func (pd *PolylangDetector) DetectLanguageWithProcInspection(namespace, podName string) ([]ContainerInfo, error) {
+	procDetector := NewProcBasedDetector(pd.Clientset, pd.Cache)
+	return procDetector.DetectLanguageForPod(context.TODO(), namespace, podName)
 }

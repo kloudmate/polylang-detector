@@ -92,16 +92,18 @@ func scanAllPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detec
 		// Mark as processed
 		processedPods.Store(key, true)
 
-		// Detect language using eBPF
+		// Detect language using /proc inspection
 		go func(p corev1.Pod) {
-			containerInfos, err := pd.DetectLanguageWithEbpf(p.Namespace, p.Name)
+			containerInfos, err := pd.DetectLanguageWithProcInspection(p.Namespace, p.Name)
 			if err != nil {
 				pd.DomainLogger.LanguageDetectionFailed(p.Namespace, p.Name, "", err)
+				// Remove from processed so we can retry
+				processedPods.Delete(p.Namespace + "/" + p.Name)
 				return
 			}
 
 			for _, info := range containerInfos {
-				pd.Logger.Sugar().Infow("eBPF detection completed",
+				pd.Logger.Sugar().Infow("/proc inspection completed",
 					"container_name", info.ContainerName,
 					"image", info.Image,
 					"language", info.Language,
@@ -113,6 +115,11 @@ func scanAllPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detec
 					"pod_name", info.PodName,
 					"detected_at", info.DetectedAt,
 				)
+
+				// Send to queue if supported language
+				if _, ok := detector.OtelSupportedLanguages[info.Language]; ok {
+					pd.Queue <- info
+				}
 			}
 		}(pod)
 
