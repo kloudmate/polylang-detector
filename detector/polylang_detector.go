@@ -53,11 +53,12 @@ type PolylangDetector struct {
 		DeploymentInfoRetrieved(namespace, podName, deploymentName, kind string)
 		DeploymentInfoFailed(namespace, podName string, err error)
 	}
-	IgnoredNamespaces []string
-	Queue             chan ContainerInfo
-	QueueSize         int
-	BatchMutex        sync.Mutex
-	Cache             *LanguageCache
+	IgnoredNamespaces  []string
+	MonitoredNamespaces []string
+	Queue              chan ContainerInfo
+	QueueSize          int
+	BatchMutex         sync.Mutex
+	Cache              *LanguageCache
 }
 
 // NewPolylangDetector creates a new language detector
@@ -75,8 +76,29 @@ func NewPolylangDetector(config *rest.Config, client *kubernetes.Clientset, doma
 	DeploymentInfoFailed(namespace, podName string, err error)
 }) *PolylangDetector {
 	addr := string(os.Getenv("KM_CFG_UPDATER_RPC_ADDR"))
+
+	// Parse ignored namespaces
 	nsEnv := string(os.Getenv("KM_IGNORED_NS"))
-	ignoredNs := strings.Split(nsEnv, ",")
+	var ignoredNs []string
+	if nsEnv != "" {
+		ignoredNs = strings.Split(nsEnv, ",")
+		// Trim whitespace from each namespace
+		for i := range ignoredNs {
+			ignoredNs[i] = strings.TrimSpace(ignoredNs[i])
+		}
+	}
+
+	// Parse monitored namespaces (higher priority than ignored)
+	monitoredEnv := string(os.Getenv("KM_MONITORED_NS"))
+	var monitoredNs []string
+	if monitoredEnv != "" {
+		monitoredNs = strings.Split(monitoredEnv, ",")
+		// Trim whitespace from each namespace
+		for i := range monitoredNs {
+			monitoredNs[i] = strings.TrimSpace(monitoredNs[i])
+		}
+	}
+
 	loggerConfig := zap.NewProductionConfig()
 	logger, _ := loggerConfig.Build()
 
@@ -89,15 +111,16 @@ func NewPolylangDetector(config *rest.Config, client *kubernetes.Clientset, doma
 	}
 
 	return &PolylangDetector{
-		Clientset:         client,
-		Config:            config,
-		IgnoredNamespaces: ignoredNs,
-		ServerAddr:        addr,
-		Logger:            logger,
-		DomainLogger:      domainLogger,
-		Queue:             make(chan ContainerInfo, 100), // Queue with a capacity of 100
-		QueueSize:         5,                             // Batch size
-		Cache:             NewLanguageCache(cacheTTL),
+		Clientset:           client,
+		Config:              config,
+		IgnoredNamespaces:   ignoredNs,
+		MonitoredNamespaces: monitoredNs,
+		ServerAddr:          addr,
+		Logger:              logger,
+		DomainLogger:        domainLogger,
+		Queue:               make(chan ContainerInfo, 100), // Queue with a capacity of 100
+		QueueSize:           5,                             // Batch size
+		Cache:               NewLanguageCache(cacheTTL),
 	}
 }
 
@@ -140,6 +163,32 @@ func (pd *PolylangDetector) SendBatch(batch []ContainerInfo) {
 	}
 
 	pd.DomainLogger.RPCBatchSent(len(batch), reply)
+}
+
+// ShouldMonitorNamespace determines if a namespace should be monitored based on configuration
+// Priority: KM_MONITORED_NS > KM_IGNORED_NS
+func (pd *PolylangDetector) ShouldMonitorNamespace(namespace string) bool {
+	// If monitored namespaces are specified, only monitor those (highest priority)
+	if len(pd.MonitoredNamespaces) > 0 {
+		for _, ns := range pd.MonitoredNamespaces {
+			if ns == namespace {
+				return true
+			}
+		}
+		return false
+	}
+
+	// If no monitored namespaces specified, check ignored list
+	if len(pd.IgnoredNamespaces) > 0 {
+		for _, ns := range pd.IgnoredNamespaces {
+			if ns == namespace {
+				return false
+			}
+		}
+	}
+
+	// Default: monitor all namespaces
+	return true
 }
 
 // DetectLanguageWithProcInspection detects language using /proc filesystem inspection (DaemonSet mode)

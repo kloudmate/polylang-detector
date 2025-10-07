@@ -2,7 +2,6 @@ package workload
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"time"
 
@@ -71,8 +70,9 @@ func scanAllPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detec
 
 	var detectedCount int
 	for _, pod := range pods.Items {
-		// Skip ignored namespaces
-		if slices.Contains(pd.IgnoredNamespaces, pod.Namespace) {
+		// Check if namespace should be monitored
+		// Priority: KM_MONITORED_NS > KM_IGNORED_NS
+		if !pd.ShouldMonitorNamespace(pod.Namespace) {
 			continue
 		}
 
