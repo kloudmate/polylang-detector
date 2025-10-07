@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/log"
 	"github.com/kloudmate/polylang-detector/detector"
 	"github.com/kloudmate/polylang-detector/pkg/logger"
 	"github.com/kloudmate/polylang-detector/rpc"

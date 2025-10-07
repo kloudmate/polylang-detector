@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/log"
 	"github.com/kloudmate/polylang-detector/detector/inspectors"
 	"github.com/kloudmate/polylang-detector/detector/process"
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -20,22 +20,24 @@ type ProcBasedDetector struct {
 	Clientset        *kubernetes.Clientset
 	LanguageDetector *inspectors.LanguageDetector
 	Cache            *LanguageCache
+	Logger           *zap.Logger
 }
 
 // NewProcBasedDetector creates a new /proc-based language detector
-func NewProcBasedDetector(clientset *kubernetes.Clientset, cache *LanguageCache) *ProcBasedDetector {
+func NewProcBasedDetector(clientset *kubernetes.Clientset, cache *LanguageCache, logger *zap.Logger) *ProcBasedDetector {
 	// Set proc dir to /host/proc if running in DaemonSet with hostPID
 	if _, err := os.Stat("/host/proc"); err == nil {
 		process.SetProcDir("/host/proc")
-		log.Info("Using /host/proc for process inspection (DaemonSet mode)")
+		logger.Info("Using /host/proc for process inspection (DaemonSet mode)")
 	} else {
-		log.Info("Using /proc for process inspection")
+		logger.Info("Using /proc for process inspection")
 	}
 
 	return &ProcBasedDetector{
 		Clientset:        clientset,
 		LanguageDetector: inspectors.NewLanguageDetector(),
 		Cache:            cache,
+		Logger:           logger,
 	}
 }
 
@@ -83,16 +85,26 @@ func (pd *ProcBasedDetector) DetectLanguageForPod(ctx context.Context, namespace
 			cachedInfo.DeploymentName = depName
 
 			results = append(results, *cachedInfo)
-			log.Infof("Cache hit for %s: %s", container.Image, cachedInfo.Language)
+			pd.Logger.Debug("Cache hit",
+				zap.String("image", container.Image),
+				zap.String("language", cachedInfo.Language),
+			)
 			continue
 		}
 
-		log.Infof("Cache miss for %s, detecting language...", container.Image)
+		pd.Logger.Debug("Cache miss, performing detection",
+			zap.String("image", container.Image),
+		)
 
 		// Find container processes using /proc
 		containerInfo, err := pd.detectContainerLanguage(ctx, pod, container)
 		if err != nil {
-			log.Errorf("Failed to detect language for container %s/%s/%s: %v", namespace, podName, container.Name, err)
+			pd.Logger.Error("Failed to detect language for container",
+				zap.String("namespace", namespace),
+				zap.String("pod", podName),
+				zap.String("container", container.Name),
+				zap.Error(err),
+			)
 			continue
 		}
 
@@ -103,7 +115,10 @@ func (pd *ProcBasedDetector) DetectLanguageForPod(ctx context.Context, namespace
 
 		// Store in cache
 		pd.Cache.Set(container.Image, containerEnvVars, *containerInfo)
-		log.Infof("Cached result for %s: %s", container.Image, containerInfo.Language)
+		pd.Logger.Debug("Cached detection result",
+			zap.String("image", container.Image),
+			zap.String("language", containerInfo.Language),
+		)
 
 		results = append(results, *containerInfo)
 	}
@@ -169,7 +184,10 @@ func (pd *ProcBasedDetector) detectContainerLanguage(ctx context.Context, pod *c
 	for _, pid := range pids {
 		procCtx, err := process.GetProcessContext(pid)
 		if err != nil {
-			log.Debugf("Failed to get process context for PID %d: %v", pid, err)
+			pd.Logger.Debug("Failed to get process context",
+				zap.Int("pid", pid),
+				zap.Error(err),
+			)
 			continue
 		}
 
@@ -178,10 +196,16 @@ func (pd *ProcBasedDetector) detectContainerLanguage(ctx context.Context, pod *c
 		if err != nil {
 			// Check if it's a conflict error
 			if conflictErr, ok := err.(*inspectors.ErrLanguageDetectionConflict); ok {
-				log.Warnf("Language detection conflict for PID %d: %v", pid, conflictErr)
+				pd.Logger.Warn("Language detection conflict",
+					zap.Int("pid", pid),
+					zap.String("error", conflictErr.Error()),
+				)
 				continue
 			}
-			log.Debugf("Failed to detect language for PID %d: %v", pid, err)
+			pd.Logger.Debug("Failed to detect language for process",
+				zap.Int("pid", pid),
+				zap.Error(err),
+			)
 			continue
 		}
 
