@@ -1,6 +1,7 @@
 package detector
 
-var otelSupportedLanguages = map[string]string{
+// OtelSupportedLanguages lists languages supported for OpenTelemetry auto-instrumentation
+var OtelSupportedLanguages = map[string]string{
 	"Go":     "go",
 	"nodejs": "node",
 	"Python": "python",

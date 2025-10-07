@@ -2,9 +2,9 @@ package workload
 
 import (
 	"fmt"
+	"log"
 	"os"
 
-	"github.com/charmbracelet/log"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -16,7 +16,7 @@ func GetClientSet() (*kubernetes.Clientset, *rest.Config, error) {
 	// Try to create a clientset from in-cluster config (Service Account).
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		log.Warn("Warning: Could not create in-cluster config. Falling back to local kubeconfig.")
+		log.Println("Warning: Could not create in-cluster config. Falling back to local kubeconfig.")
 		// Fallback to local kubeconfig.
 		kubeconfigPath := os.Getenv("KUBECONFIG")
 		if kubeconfigPath == "" {
