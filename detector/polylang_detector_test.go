@@ -6,12 +6,12 @@ import (
 
 func TestShouldMonitorNamespace(t *testing.T) {
 	tests := []struct {
-		name              string
-		ignoredNs         []string
-		monitoredNs       []string
-		testNamespace     string
-		expectedResult    bool
-		description       string
+		name           string
+		ignoredNs      []string
+		monitoredNs    []string
+		testNamespace  string
+		expectedResult bool
+		description    string
 	}{
 		{
 			name:           "No filters - should monitor all",
@@ -59,7 +59,7 @@ func TestShouldMonitorNamespace(t *testing.T) {
 			monitoredNs:    []string{"production", "staging"},
 			testNamespace:  "production",
 			expectedResult: true,
-			description:    "KM_MONITORED_NS has higher priority - production should be monitored even if ignored",
+			description:    "KM_K8S_MONITORED_NAMESPACES has higher priority - production should be monitored even if ignored",
 		},
 		{
 			name:           "Monitored takes precedence - namespace not in monitored",
@@ -99,11 +99,11 @@ func TestShouldMonitorNamespace(t *testing.T) {
 
 func TestShouldMonitorNamespace_EdgeCases(t *testing.T) {
 	tests := []struct {
-		name              string
-		ignoredNs         []string
-		monitoredNs       []string
-		testNamespace     string
-		expectedResult    bool
+		name           string
+		ignoredNs      []string
+		monitoredNs    []string
+		testNamespace  string
+		expectedResult bool
 	}{
 		{
 			name:           "Empty string namespace with no filters",
