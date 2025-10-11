@@ -71,7 +71,7 @@ func scanAllPods(ctx context.Context, clientset *kubernetes.Clientset, pd *detec
 	var detectedCount int
 	for _, pod := range pods.Items {
 		// Check if namespace should be monitored
-		// Priority: KM_MONITORED_NS > KM_IGNORED_NS
+		// Priority: KM_K8S_MONITORED_NAMESPACES > KM_IGNORED_NS
 		if !pd.ShouldMonitorNamespace(pod.Namespace) {
 			continue
 		}

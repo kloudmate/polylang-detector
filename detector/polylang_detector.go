@@ -53,12 +53,12 @@ type PolylangDetector struct {
 		DeploymentInfoRetrieved(namespace, podName, deploymentName, kind string)
 		DeploymentInfoFailed(namespace, podName string, err error)
 	}
-	IgnoredNamespaces  []string
+	IgnoredNamespaces   []string
 	MonitoredNamespaces []string
-	Queue              chan ContainerInfo
-	QueueSize          int
-	BatchMutex         sync.Mutex
-	Cache              *LanguageCache
+	Queue               chan ContainerInfo
+	QueueSize           int
+	BatchMutex          sync.Mutex
+	Cache               *LanguageCache
 }
 
 // NewPolylangDetector creates a new language detector
@@ -89,7 +89,7 @@ func NewPolylangDetector(config *rest.Config, client *kubernetes.Clientset, doma
 	}
 
 	// Parse monitored namespaces (higher priority than ignored)
-	monitoredEnv := string(os.Getenv("KM_MONITORED_NS"))
+	monitoredEnv := string(os.Getenv("KM_K8S_MONITORED_NAMESPACES"))
 	var monitoredNs []string
 	if monitoredEnv != "" {
 		monitoredNs = strings.Split(monitoredEnv, ",")
@@ -166,7 +166,7 @@ func (pd *PolylangDetector) SendBatch(batch []ContainerInfo) {
 }
 
 // ShouldMonitorNamespace determines if a namespace should be monitored based on configuration
-// Priority: KM_MONITORED_NS > KM_IGNORED_NS
+// Priority: KM_K8S_MONITORED_NAMESPACES > KM_IGNORED_NS
 func (pd *PolylangDetector) ShouldMonitorNamespace(namespace string) bool {
 	// If monitored namespaces are specified, only monitor those (highest priority)
 	if len(pd.MonitoredNamespaces) > 0 {
