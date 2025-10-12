@@ -197,6 +197,18 @@ func (pd *PolylangDetector) DetectLanguageWithProcInspection(namespace, podName 
 	return procDetector.DetectLanguageForPod(context.TODO(), namespace, podName)
 }
 
+// StartEBPFDetection starts eBPF-based real-time process detection (recommended mode)
+func (pd *PolylangDetector) StartEBPFDetection(ctx context.Context) error {
+	pd.Logger.Info("Starting eBPF-based language detection")
+
+	ebpfDetector, err := NewEBPFDetector(pd.Clientset, pd.Cache, pd.Logger)
+	if err != nil {
+		return fmt.Errorf("failed to create eBPF detector: %w", err)
+	}
+
+	return ebpfDetector.Start(ctx)
+}
+
 // getPodDeploymentName finds the name of the deployment that owns a given pod.
 func getPodDeploymentName(clientset *kubernetes.Clientset, namespace, podName string) (string, error) {
 	// Get the pod object

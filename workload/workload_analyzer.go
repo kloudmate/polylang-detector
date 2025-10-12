@@ -11,7 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// ScanPodsEbpf continuously scans all running pods using eBPF-based detection
+// ScanPodsEbpf continuously scans all running pods using eBPF-based detection (Odigos pattern)
 func ScanPodsEbpf(ctx context.Context, clientset *kubernetes.Clientset, pd *detector.PolylangDetector, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
@@ -20,6 +20,33 @@ func ScanPodsEbpf(ctx context.Context, clientset *kubernetes.Clientset, pd *dete
 		EbpfScanStarted()
 	}).EbpfScanStarted()
 
+	// Use Odigos pattern: watch pods + mount-based process discovery
+	pd.Logger.Info("Starting eBPF-based detection (Odigos pattern)")
+
+	// Create eBPF detector
+	ebpfDetector, err := detector.NewEBPFDetector(clientset, pd.Cache, pd.Logger, pd.Queue)
+	if err != nil {
+		pd.Logger.Sugar().Errorf("Failed to create eBPF detector, falling back: %v", err)
+		scanPodsPeriodicFallback(ctx, clientset, pd)
+		return
+	}
+
+	// Start the eBPF detector (pod watching + mount-based detection)
+	if err := ebpfDetector.Start(ctx); err != nil {
+		pd.Logger.Sugar().Errorf("Failed to start eBPF detection, falling back: %v", err)
+		scanPodsPeriodicFallback(ctx, clientset, pd)
+		return
+	}
+
+	// Wait for context cancellation
+	<-ctx.Done()
+	pd.DomainLogger.(interface {
+		EbpfScanStopped()
+	}).EbpfScanStopped()
+}
+
+// scanPodsPeriodicFallback is the fallback when eBPF is not available
+func scanPodsPeriodicFallback(ctx context.Context, clientset *kubernetes.Clientset, pd *detector.PolylangDetector) {
 	// Track processed pods to avoid duplicate processing
 	processedPods := sync.Map{}
 
@@ -38,9 +65,6 @@ func ScanPodsEbpf(ctx context.Context, clientset *kubernetes.Clientset, pd *dete
 	for {
 		select {
 		case <-ctx.Done():
-			pd.DomainLogger.(interface {
-				EbpfScanStopped()
-			}).EbpfScanStopped()
 			return
 		case <-ticker.C:
 			// Scan pods periodically
