@@ -8,29 +8,33 @@ import (
 )
 
 // LanguageCache provides thread-safe caching of language detection results
+// It maintains both image-based cache and workload-based cache for cluster state synchronization
+// Cache entries persist until workload is explicitly deleted - no time-based expiration
 type LanguageCache struct {
-	mu    sync.RWMutex
-	cache map[string]*CacheEntry
-	ttl   time.Duration
+	mu            sync.RWMutex
+	cache         map[string]*CacheEntry         // Image-based cache: key -> CacheEntry
+	workloadCache map[string]*WorkloadCacheEntry // Workload-based cache: namespace/workloadName -> WorkloadCacheEntry
 }
 
-// CacheEntry represents a cached detection result with expiration
+// CacheEntry represents a cached detection result (no expiration)
 type CacheEntry struct {
-	Info      ContainerInfo
-	ExpiresAt time.Time
+	Info ContainerInfo
 }
 
-// NewLanguageCache creates a new cache with the specified TTL
+// WorkloadCacheEntry represents detection results for a specific workload (deployment/daemonset/replicaset)
+type WorkloadCacheEntry struct {
+	Namespace    string
+	WorkloadName string
+	WorkloadKind string
+	Containers   map[string]ContainerInfo // containerName -> ContainerInfo
+}
+
+// NewLanguageCache creates a new cache (ttl parameter kept for compatibility but not used)
 func NewLanguageCache(ttl time.Duration) *LanguageCache {
-	cache := &LanguageCache{
-		cache: make(map[string]*CacheEntry),
-		ttl:   ttl,
+	return &LanguageCache{
+		cache:         make(map[string]*CacheEntry),
+		workloadCache: make(map[string]*WorkloadCacheEntry),
 	}
-
-	// Start background cleanup goroutine
-	go cache.cleanup()
-
-	return cache
 }
 
 // generateKey creates a cache key from image and environment variables
@@ -55,7 +59,7 @@ func (lc *LanguageCache) generateKey(image string, envVars map[string]string) st
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// Get retrieves a cached result if it exists and hasn't expired
+// Get retrieves a cached result if it exists (no expiration check)
 func (lc *LanguageCache) Get(image string, envVars map[string]string) (*ContainerInfo, bool) {
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
@@ -67,39 +71,98 @@ func (lc *LanguageCache) Get(image string, envVars map[string]string) (*Containe
 		return nil, false
 	}
 
-	// Check if expired
-	if time.Now().After(entry.ExpiresAt) {
-		return nil, false
-	}
-
 	return &entry.Info, true
 }
 
-// Set stores a detection result in the cache
+// Set stores a detection result in the cache (persists until manually removed)
 func (lc *LanguageCache) Set(image string, envVars map[string]string, info ContainerInfo) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 
 	key := lc.generateKey(image, envVars)
 	lc.cache[key] = &CacheEntry{
-		Info:      info,
-		ExpiresAt: time.Now().Add(lc.ttl),
+		Info: info,
 	}
 }
 
-// cleanup periodically removes expired entries
-func (lc *LanguageCache) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
+// SetWorkload stores detection results for a specific workload
+func (lc *LanguageCache) SetWorkload(namespace, workloadName, workloadKind string, containers map[string]ContainerInfo) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
 
-	for range ticker.C {
-		lc.mu.Lock()
-		now := time.Now()
-		for key, entry := range lc.cache {
-			if now.After(entry.ExpiresAt) {
-				delete(lc.cache, key)
-			}
-		}
-		lc.mu.Unlock()
+	key := namespace + "/" + workloadName
+	lc.workloadCache[key] = &WorkloadCacheEntry{
+		Namespace:    namespace,
+		WorkloadName: workloadName,
+		WorkloadKind: workloadKind,
+		Containers:   containers,
 	}
+}
+
+// UpdateWorkloadContainer updates a single container in a workload's cache
+func (lc *LanguageCache) UpdateWorkloadContainer(namespace, workloadName, workloadKind string, info ContainerInfo) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+
+	key := namespace + "/" + workloadName
+	entry, exists := lc.workloadCache[key]
+
+	if !exists {
+		entry = &WorkloadCacheEntry{
+			Namespace:    namespace,
+			WorkloadName: workloadName,
+			WorkloadKind: workloadKind,
+			Containers:   make(map[string]ContainerInfo),
+		}
+		lc.workloadCache[key] = entry
+	}
+
+	entry.Containers[info.ContainerName] = info
+}
+
+// GetWorkload retrieves cached detection results for a workload
+func (lc *LanguageCache) GetWorkload(namespace, workloadName string) (*WorkloadCacheEntry, bool) {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	key := namespace + "/" + workloadName
+	entry, exists := lc.workloadCache[key]
+	return entry, exists
+}
+
+// RemoveWorkload completely removes a workload from the cache
+func (lc *LanguageCache) RemoveWorkload(namespace, workloadName string) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+
+	key := namespace + "/" + workloadName
+	delete(lc.workloadCache, key)
+}
+
+// GetAllActiveWorkloads returns all workloads in the cache
+func (lc *LanguageCache) GetAllActiveWorkloads() []WorkloadCacheEntry {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	var workloads []WorkloadCacheEntry
+	for _, entry := range lc.workloadCache {
+		workloads = append(workloads, *entry)
+	}
+
+	return workloads
+}
+
+// GetAllActiveContainers returns all container infos from all workloads
+func (lc *LanguageCache) GetAllActiveContainers() []ContainerInfo {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	var containers []ContainerInfo
+	for _, entry := range lc.workloadCache {
+		for _, containerInfo := range entry.Containers {
+			containers = append(containers, containerInfo)
+		}
+	}
+
+	return containers
 }

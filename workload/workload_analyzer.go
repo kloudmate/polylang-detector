@@ -11,7 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// ScanPodsEbpf continuously scans all running pods using eBPF-based detection (Odigos pattern)
+// ScanPodsEbpf continuously scans all running pods using eBPF-based detection
 func ScanPodsEbpf(ctx context.Context, clientset *kubernetes.Clientset, pd *detector.PolylangDetector, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
@@ -20,8 +20,8 @@ func ScanPodsEbpf(ctx context.Context, clientset *kubernetes.Clientset, pd *dete
 		EbpfScanStarted()
 	}).EbpfScanStarted()
 
-	// Use Odigos pattern: watch pods + mount-based process discovery
-	pd.Logger.Info("Starting eBPF-based detection (Odigos pattern)")
+	// Use pattern: watch pods + mount-based process discovery
+	pd.Logger.Info("Starting eBPF-based detection")
 
 	// Create eBPF detector
 	ebpfDetector, err := detector.NewEBPFDetector(clientset, pd.Cache, pd.Logger, pd.Queue)
