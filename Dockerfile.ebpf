@@ -1,0 +1,36 @@
+FROM keyval/odiglet-base:v1.8 AS ebpf-builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN cd /go/pkg/mod/github.com/odigos-io/runtime-detector@v0.0.20 && \
+    chmod -R +w . && \
+    make generate 2>/dev/null || go generate ./...
+
+# Generate any eBPF files in the project
+RUN go generate ./...
+
+FROM golang:1.24.8-alpine AS builder
+
+WORKDIR /app
+
+COPY --from=ebpf-builder /go/pkg/mod /go/pkg/mod
+COPY --from=ebpf-builder /app .
+
+# Building with the pre-generated eBPF object files
+# The eBPF object files are now embedded via go:embed directives
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o polylang-detector ./cmd/main.go
+
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+
+COPY --from=builder /app/polylang-detector .
+
+CMD ["./polylang-detector"]

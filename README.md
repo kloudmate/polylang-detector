@@ -1,10 +1,10 @@
 # Polylang-Detector
 
-**Automated programming language detection for Kubernetes workloads using /proc filesystem inspection**
+**Automated programming language detection for Kubernetes workloads using eBPF**
 
 ## Overview
 
-polylang-detector is a Kubernetes-native service that automatically detects the programming language of applications running in your cluster. It uses advanced /proc filesystem inspection and ELF binary analysis to accurately identify languages without requiring `kubectl exec` or code changes.
+polylang-detector is a Kubernetes-native service that automatically detects the programming language of applications running in your cluster.
 
 ## Contributing
 

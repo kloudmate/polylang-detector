@@ -194,28 +194,86 @@ func GetContainerPIDs(containerID string) ([]int, error) {
 		return nil, fmt.Errorf("container ID is empty")
 	}
 
-	// Try cgroup v2 first
-	cgroupPaths := []string{
-		// Docker
-		fmt.Sprintf("/sys/fs/cgroup/system.slice/docker-%s.scope/cgroup.procs", containerID),
-		// Kubernetes with Docker
-		fmt.Sprintf("/sys/fs/cgroup/kubepods/pod*/docker-%s/cgroup.procs", containerID),
-		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice/docker-%s.scope/cgroup.procs", containerID),
-		// Containerd
-		fmt.Sprintf("/sys/fs/cgroup/system.slice/cri-containerd-%s.scope/cgroup.procs", containerID),
-		// CRI-O
-		fmt.Sprintf("/sys/fs/cgroup/system.slice/crio-%s.scope/cgroup.procs", containerID),
+	// Support both 12-char short ID and full 64-char ID
+	shortID := containerID
+	if len(containerID) > 12 {
+		shortID = containerID[:12]
 	}
 
+	// Try cgroup paths with both full and short container IDs
+	// Order: cgroup v2 unified hierarchy first (modern systems), then v1
+	cgroupPaths := []string{
+		// === Cgroup v2 (unified hierarchy) - Modern Kubernetes/containerd ===
+		// GKE/Containerd with QoS classes (Burstable, BestEffort, Guaranteed)
+		// Pattern: /sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod<UUID>.slice/cri-containerd-<ID>.scope/
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod*.slice/cri-containerd-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod*.slice/cri-containerd-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice/cri-containerd-%s.scope/cgroup.procs", containerID), // Guaranteed QoS
+
+		// Same patterns with short container ID
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod*.slice/cri-containerd-%s.scope/cgroup.procs", shortID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod*.slice/cri-containerd-%s.scope/cgroup.procs", shortID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice/cri-containerd-%s.scope/cgroup.procs", shortID),
+
+		// Generic patterns without QoS specificity (fallback)
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-*.slice/kubepods-*-pod*.slice/cri-containerd-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-*.slice/kubepods-*-pod*.slice/cri-containerd-%s.scope/cgroup.procs", shortID),
+
+		// Containerd - system slice
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/containerd.service/kubepods-*.slice/kubepods-*-pod*.slice/cri-containerd-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/containerd.service/kubepods-*.slice/kubepods-*-pod*.slice/cri-containerd-%s.scope/cgroup.procs", shortID),
+
+		// Simplified containerd patterns (very broad search)
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/*/*/cri-containerd-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/*/*/cri-containerd-%s.scope/cgroup.procs", shortID),
+
+		// Docker on cgroup v2 with QoS
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod*.slice/docker-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod*.slice/docker-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice/docker-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-*.slice/kubepods-*-pod*.slice/docker-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-*.slice/kubepods-*-pod*.slice/docker-%s.scope/cgroup.procs", shortID),
+
+		// CRI-O on cgroup v2 with QoS
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod*.slice/crio-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod*.slice/crio-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice/crio-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-*.slice/kubepods-*-pod*.slice/crio-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-*.slice/kubepods-*-pod*.slice/crio-%s.scope/cgroup.procs", shortID),
+
+		// === Cgroup v1 (legacy) ===
+		// Docker
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/docker-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/docker-%s.scope/cgroup.procs", shortID),
+		// Kubernetes with Docker
+		fmt.Sprintf("/sys/fs/cgroup/kubepods/pod*/docker-%s/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods/pod*/docker-%s/cgroup.procs", shortID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice/docker-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice/docker-%s.scope/cgroup.procs", shortID),
+		// Containerd v1
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/cri-containerd-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/cri-containerd-%s.scope/cgroup.procs", shortID),
+		// CRI-O v1
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/crio-%s.scope/cgroup.procs", containerID),
+		fmt.Sprintf("/sys/fs/cgroup/system.slice/crio-%s.scope/cgroup.procs", shortID),
+	}
+
+	var attemptedPaths []string
 	for _, pattern := range cgroupPaths {
 		matches, err := filepath.Glob(pattern)
-		if err != nil || len(matches) == 0 {
+		if err != nil {
+			continue
+		}
+
+		if len(matches) == 0 {
+			attemptedPaths = append(attemptedPaths, pattern)
 			continue
 		}
 
 		for _, cgroupFile := range matches {
 			file, err := os.Open(cgroupFile)
 			if err != nil {
+				attemptedPaths = append(attemptedPaths, fmt.Sprintf("%s (open error: %v)", cgroupFile, err))
 				continue
 			}
 			defer file.Close()
@@ -229,12 +287,18 @@ func GetContainerPIDs(containerID string) ([]int, error) {
 			}
 
 			if len(pids) > 0 {
+				// Success - log which pattern worked (useful for debugging)
+				fmt.Fprintf(os.Stderr, "[DEBUG] Found %d PIDs for container %s using cgroup: %s\n",
+					len(pids), shortID, cgroupFile)
 				return pids, nil
 			}
+			attemptedPaths = append(attemptedPaths, fmt.Sprintf("%s (empty)", cgroupFile))
 		}
 	}
 
-	return nil, fmt.Errorf("no PIDs found for container %s", containerID)
+	// Enhanced error message with debugging info
+	return nil, fmt.Errorf("no PIDs found for container %s (short: %s). Tried %d patterns, attempted paths: %v",
+		containerID, shortID, len(cgroupPaths), attemptedPaths)
 }
 
 // IsProcessEqualToAny checks if process executable or cmdline matches any of the given names

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -197,6 +198,18 @@ func (pd *PolylangDetector) DetectLanguageWithProcInspection(namespace, podName 
 	return procDetector.DetectLanguageForPod(context.TODO(), namespace, podName)
 }
 
+// StartEBPFDetection starts eBPF-based real-time process detection (recommended mode)
+func (pd *PolylangDetector) StartEBPFDetection(ctx context.Context) error {
+	pd.Logger.Info("Starting eBPF-based language detection")
+
+	ebpfDetector, err := NewEBPFDetector(pd.Clientset, pd.Cache, pd.Logger, pd.Queue)
+	if err != nil {
+		return fmt.Errorf("failed to create eBPF detector: %w", err)
+	}
+
+	return ebpfDetector.Start(ctx)
+}
+
 // getPodDeploymentName finds the name of the deployment that owns a given pod.
 func getPodDeploymentName(clientset *kubernetes.Clientset, namespace, podName string) (string, error) {
 	// Get the pod object
@@ -231,4 +244,31 @@ func getPodDeploymentName(clientset *kubernetes.Clientset, namespace, podName st
 	}
 
 	return ownerRef.Name, fmt.Errorf("unknown owner kind: %s for pod %s", ownerRef.Kind, podName)
+}
+
+// getWorkloadInfo returns the workload name and kind for a pod
+// For pods owned by ReplicaSets managed by a Deployment, it returns the Deployment name and "Deployment" kind
+// This ensures cache reconciliation works correctly by matching the actual resource type in the cluster
+func getWorkloadInfo(clientset *kubernetes.Clientset, pod *corev1.Pod) (string, string) {
+	ownerRef := metav1.GetControllerOf(pod)
+	if ownerRef == nil {
+		return pod.Name, "Pod"
+	}
+
+	// If the owner is a ReplicaSet, check if it's managed by a Deployment
+	if ownerRef.Kind == "ReplicaSet" {
+		replicaSet, err := clientset.AppsV1().ReplicaSets(pod.Namespace).Get(context.TODO(), ownerRef.Name, metav1.GetOptions{})
+		if err == nil {
+			rsOwnerRef := metav1.GetControllerOf(replicaSet)
+			if rsOwnerRef != nil && rsOwnerRef.Kind == "Deployment" {
+				// Return Deployment info for proper reconciliation
+				return rsOwnerRef.Name, "Deployment"
+			}
+		}
+		// Fallback to ReplicaSet if no Deployment found
+		return ownerRef.Name, "ReplicaSet"
+	}
+
+	// For other resource types (DaemonSet, StatefulSet, Job, etc.), use the direct owner
+	return ownerRef.Name, ownerRef.Kind
 }

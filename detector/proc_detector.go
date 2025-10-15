@@ -156,10 +156,7 @@ func (pd *ProcBasedDetector) detectContainerLanguage(ctx context.Context, pod *c
 			// Format: docker://abc123... or containerd://abc123...
 			parts := strings.Split(status.ContainerID, "://")
 			if len(parts) == 2 {
-				containerID = parts[1]
-				if len(containerID) > 12 {
-					containerID = containerID[:12]
-				}
+				containerID = parts[1] // Keep full container ID (don't truncate)
 				break
 			}
 		}
@@ -168,6 +165,11 @@ func (pd *ProcBasedDetector) detectContainerLanguage(ctx context.Context, pod *c
 	if containerID == "" {
 		return nil, fmt.Errorf("container ID not found for %s", container.Name)
 	}
+
+	pd.Logger.Debug("Looking for container PIDs",
+		zap.String("container", container.Name),
+		zap.String("containerID", containerID),
+	)
 
 	// Get PIDs for this container
 	pids, err := process.GetContainerPIDs(containerID)

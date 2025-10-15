@@ -40,6 +40,7 @@ type LanguageInspector interface {
 }
 
 // AllInspectors returns all available language inspectors
+// Only monitoring: .NET, Java, Node.js, Python, and Go
 func AllInspectors() []LanguageInspector {
 	return []LanguageInspector{
 		NewJavaInspector(),
@@ -47,8 +48,5 @@ func AllInspectors() []LanguageInspector {
 		NewNodeJSInspector(),
 		NewGoInspector(),
 		NewDotNetInspector(),
-		NewPHPInspector(),
-		NewRubyInspector(),
-		NewRustInspector(),
 	}
 }
